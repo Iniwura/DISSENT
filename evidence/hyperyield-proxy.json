@@ -1,0 +1,14 @@
+{
+  "canonical_url": "https://explorer.example/address/0x71f3#proxy",
+  "contract": "0x71f3000000000000000000000000000000000000",
+  "upgradeable": true,
+  "implementation": "0x1a91000000000000000000000000000000000000",
+  "admin": {
+    "owner": "0xA11CE00000000000000000000000000000009E02",
+    "owner_kind": "EOA",
+    "identity": "anonymous",
+    "timelock_seconds": 0,
+    "multisig_threshold": 1
+  },
+  "observed_at": "2026-09-09T12:00:17Z"
+}
