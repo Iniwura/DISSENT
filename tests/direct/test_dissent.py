@@ -234,7 +234,7 @@ def test_block_rewards_material_challenger_and_slashes_noise(
                     },
                 ],
             }
-        ),
+        ).encode(),
     )
     direct_vm.warp(AFTER_DEADLINE)
 
@@ -277,7 +277,7 @@ def test_clear_returns_bounty_and_rejected_stake_to_proposer(
                     }
                 ],
             }
-        ),
+        ).encode(),
     )
     direct_vm.warp(AFTER_DEADLINE)
 
@@ -316,7 +316,7 @@ def test_rejects_clear_verdict_with_accepted_challenge(
                     }
                 ],
             }
-        ),
+        ).encode(),
     )
     direct_vm.warp(AFTER_DEADLINE)
 
@@ -352,7 +352,7 @@ def test_rejects_material_verdict_without_accepted_challenge(
                     }
                 ],
             }
-        ),
+        ).encode(),
     )
     direct_vm.warp(AFTER_DEADLINE)
 

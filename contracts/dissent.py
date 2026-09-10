@@ -1,9 +1,11 @@
-# { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
+# { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
 
-import datetime
 import json
 from dataclasses import dataclass
-from genlayer import *
+from datetime import datetime, timezone
+
+import genlayer as gl
+from genlayer.storage import allow as allow_storage
 
 
 OPEN = "OPEN"
@@ -23,18 +25,18 @@ MAX_SOURCE_CHARS = 12_000
 @dataclass
 class Proposal:
     id: str
-    proposer: Address
+    proposer: gl.Address
     action: str
     objective: str
     policy: str
     evidence_url: str
     status: str
-    bond: u256
-    bounty: u256
-    opened_at: u256
-    challenge_deadline: u256
-    resolved_at: u256
-    challenge_count: u256
+    bond: gl.u256
+    bounty: gl.u256
+    opened_at: gl.u256
+    challenge_deadline: gl.u256
+    resolved_at: gl.u256
+    challenge_count: gl.u256
     resolution: str
 
 
@@ -43,35 +45,35 @@ class Proposal:
 class Challenge:
     id: str
     proposal_id: str
-    challenger: Address
+    challenger: gl.Address
     objection: str
     evidence_url: str
-    stake: u256
+    stake: gl.u256
     status: str
     reasoning: str
 
 
-class Dissent(gl.Contract):
+class Dissent(gl.contract.Contract):
     """A staked market for finding material flaws before an agent acts."""
 
-    minimum_bounty: u256
-    minimum_stake: u256
-    proposals: TreeMap[str, Proposal]
-    challenges: TreeMap[str, Challenge]
-    proposal_challenges: TreeMap[str, TreeMap[u256, str]]
-    challenger_used: TreeMap[str, TreeMap[Address, bool]]
-    credits: TreeMap[Address, u256]
+    minimum_bounty: gl.u256
+    minimum_stake: gl.u256
+    proposals: gl.storage.TreeMap[str, Proposal]
+    challenges: gl.storage.TreeMap[str, Challenge]
+    proposal_challenges: gl.storage.TreeMap[str, gl.storage.TreeMap[gl.u256, str]]
+    challenger_used: gl.storage.TreeMap[str, gl.storage.TreeMap[gl.Address, bool]]
+    credits: gl.storage.TreeMap[gl.Address, gl.u256]
 
     def __init__(self, minimum_bounty: int, minimum_stake: int):
         if minimum_bounty <= 0:
             raise gl.vm.UserError("Minimum bounty must be positive")
         if minimum_stake <= 0:
             raise gl.vm.UserError("Minimum stake must be positive")
-        self.minimum_bounty = u256(minimum_bounty)
-        self.minimum_stake = u256(minimum_stake)
+        self.minimum_bounty = gl.u256(minimum_bounty)
+        self.minimum_stake = gl.u256(minimum_stake)
 
     def _now(self) -> int:
-        return int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        return int(datetime.now(timezone.utc).timestamp())
 
     def _require_text(self, value: str, field: str, maximum: int) -> None:
         cleaned = value.strip()
@@ -85,15 +87,15 @@ class Dissent(gl.Contract):
         if not value.strip().lower().startswith("https://"):
             raise gl.vm.UserError("Evidence URL must use HTTPS")
 
-    def _credit(self, recipient: Address, amount: u256) -> None:
-        current = self.credits.get(recipient, u256(0))
-        self.credits[recipient] = u256(int(current) + int(amount))
+    def _credit(self, recipient: gl.Address, amount: gl.u256) -> None:
+        current = self.credits.get(recipient, gl.u256(0))
+        self.credits[recipient] = gl.u256(int(current) + int(amount))
 
     def _challenge_ids(self, proposal: Proposal) -> list[str]:
         result = []
         index = 0
         while index < int(proposal.challenge_count):
-            result.append(self.proposal_challenges[proposal.id][u256(index)])
+            result.append(self.proposal_challenges[proposal.id][gl.u256(index)])
             index += 1
         return result
 
@@ -133,12 +135,12 @@ class Dissent(gl.Contract):
             policy=policy.strip(),
             evidence_url=evidence_url.strip(),
             status=OPEN,
-            bond=u256(paid - bounty),
-            bounty=u256(bounty),
-            opened_at=u256(opened_at),
-            challenge_deadline=u256(opened_at + review_seconds),
-            resolved_at=u256(0),
-            challenge_count=u256(0),
+            bond=gl.u256(paid - bounty),
+            bounty=gl.u256(bounty),
+            opened_at=gl.u256(opened_at),
+            challenge_deadline=gl.u256(opened_at + review_seconds),
+            resolved_at=gl.u256(0),
+            challenge_count=gl.u256(0),
             resolution="",
         )
 
@@ -187,7 +189,7 @@ class Dissent(gl.Contract):
             challenge_index
         ] = challenge_id
         self.challenger_used[proposal_id][gl.message.sender_address] = True
-        proposal.challenge_count = u256(int(proposal.challenge_count) + 1)
+        proposal.challenge_count = gl.u256(int(proposal.challenge_count) + 1)
 
     def _adjudicate(self, proposal: Proposal, challenge_ids: list[str]) -> dict:
         challenge_packet = []
@@ -242,11 +244,13 @@ flaw can be corrected before execution. BLOCK means the action should not execut
 under the current proposal.
 """
             result = gl.nondet.exec_prompt(prompt, response_format="json")
+            if isinstance(result, str):
+                result = json.loads(result)
             return json.dumps(result, sort_keys=True)
 
         raw = gl.eq_principle.prompt_comparative(
             evaluate,
-            principle=(
+            (
                 "The verdict and each challenge status must be exactly the same. "
                 "The summary and reasoning must agree on the material facts."
             ),
@@ -313,18 +317,18 @@ under the current proposal.
         self._credit(proposal.proposer, proposal.bond)
         if len(accepted) == 0:
             self._credit(
-                proposal.proposer, u256(int(proposal.bounty) + rejected_stakes)
+                proposal.proposer, gl.u256(int(proposal.bounty) + rejected_stakes)
             )
             return
 
         reward_pool = int(proposal.bounty) + rejected_stakes
         reward_share = reward_pool // len(accepted)
         remainder = reward_pool - (reward_share * len(accepted))
-        self._credit(proposal.proposer, u256(remainder))
+        self._credit(proposal.proposer, gl.u256(remainder))
         for challenge_id in accepted:
             challenge = self.challenges[challenge_id]
             self._credit(
-                challenge.challenger, u256(int(challenge.stake) + reward_share)
+                challenge.challenger, gl.u256(int(challenge.stake) + reward_share)
             )
 
     @gl.public.write
@@ -350,7 +354,7 @@ under the current proposal.
 
         proposal.status = result["verdict"]
         proposal.resolution = result["summary"]
-        proposal.resolved_at = u256(self._now())
+        proposal.resolved_at = gl.u256(self._now())
         self._settle(proposal, result, challenge_ids)
 
     @gl.public.view
@@ -381,14 +385,14 @@ under the current proposal.
 
     @gl.public.view
     def get_credit(self, account: str) -> int:
-        return int(self.credits.get(Address(account), u256(0)))
+        return int(self.credits.get(gl.Address(account), gl.u256(0)))
 
     @gl.public.write
     def withdraw(self) -> None:
         recipient = gl.message.sender_address
-        amount = self.credits.get(recipient, u256(0))
+        amount = self.credits.get(recipient, gl.u256(0))
         if int(amount) == 0:
             raise gl.vm.UserError("No credit to withdraw")
 
-        self.credits[recipient] = u256(0)
-        gl.get_contract_at(recipient).emit_transfer(value=amount)
+        self.credits[recipient] = gl.u256(0)
+        gl.contract.get_at(recipient).emit_transfer(value=amount)
