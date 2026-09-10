@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dissent Studio-dev E2E Harness</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      body { max-width: 960px; margin: 40px auto; padding: 0 20px; background: #101418; color: #e8edf2; }
+      button { margin: 8px 8px 8px 0; padding: 10px 14px; border: 0; border-radius: 6px; cursor: pointer; }
+      button:disabled { cursor: not-allowed; opacity: .45; }
+      #connect { background: #8fd3ff; color: #07121b; }
+      #run { background: #a5e887; color: #0a1805; }
+      pre { min-height: 260px; padding: 16px; overflow: auto; white-space: pre-wrap; background: #070a0d; border: 1px solid #29343d; border-radius: 8px; }
+      .warning { color: #ffd27d; }
+    </style>
+  </head>
+  <body>
+    <h1>Dissent Studio-dev E2E Harness</h1>
+    <p class="warning">
+      This page is isolated from the application frontend. It never submits on load.
+      The second button deploys a fresh contract and submits the lifecycle scenarios only
+      after an explicit click.
+    </p>
+    <button id="connect" type="button">Connect two wallet accounts</button>
+    <button id="run" type="button" disabled>Run isolated E2E</button>
+    <pre id="status" aria-live="polite">Wallet not connected.</pre>
+    <script type="module" src="/tests/integration/studio-dev-browser/main.js"></script>
+  </body>
+</html>
