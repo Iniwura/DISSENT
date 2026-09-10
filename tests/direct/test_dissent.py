@@ -17,6 +17,7 @@ def _commit(
     contract,
     vm,
     proposer,
+    proposal_id="treasury-pool-001",
     execution_recipient=None,
     bounty=300,
     total=1_300,
@@ -25,7 +26,7 @@ def _commit(
     vm.sender = proposer
     vm.value = total
     contract.commit(
-        "treasury-pool-001",
+        proposal_id,
         "Deposit 20,000 USDC into the HyperYield pool advertising 40% APY",
         "Earn yield without exposing principal to unilateral control",
         "Block if an anonymous party can upgrade or drain the pool",
@@ -108,6 +109,13 @@ def test_config_is_exposed(direct_vm, direct_deploy):
     }
 
 
+def test_proposal_index_starts_empty(direct_vm, direct_deploy):
+    contract = _deploy(direct_vm, direct_deploy)
+
+    assert contract.get_proposal_count() == 0
+    assert contract.get_proposal_ids(0, 1) == []
+
+
 def test_commit_opens_timed_round_and_splits_value(
     direct_vm, direct_deploy, direct_alice
 ):
@@ -126,6 +134,77 @@ def test_commit_opens_timed_round_and_splits_value(
     assert proposal.superseded_by == ""
     assert int(proposal.executed_at) == 0
     assert contract.can_execute("treasury-pool-001") is False
+
+
+def test_commit_appends_proposal_id_once(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice)
+
+    assert contract.get_proposal_count() == 1
+    assert contract.get_proposal_ids(0, 50) == ["treasury-pool-001"]
+
+    direct_vm.sender = direct_alice
+    direct_vm.value = 1_300
+    with direct_vm.expect_revert("Proposal already exists"):
+        contract.commit(
+            "treasury-pool-001",
+            "Duplicate action",
+            "Duplicate objective",
+            "Duplicate policy",
+            "https://proposal.example/duplicate",
+            to_hex(direct_alice),
+            300,
+            60,
+        )
+
+    assert contract.get_proposal_count() == 1
+    assert contract.get_proposal_ids(0, 50) == ["treasury-pool-001"]
+
+
+def test_proposal_index_preserves_creation_order(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-1")
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-2")
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-3")
+
+    assert contract.get_proposal_count() == 3
+    assert contract.get_proposal_ids(0, 50) == [
+        "proposal-1",
+        "proposal-2",
+        "proposal-3",
+    ]
+
+
+def test_proposal_index_paginates_and_handles_out_of_range_offsets(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-1")
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-2")
+    _commit(contract, direct_vm, direct_alice, proposal_id="proposal-3")
+
+    assert contract.get_proposal_ids(0, 2) == ["proposal-1", "proposal-2"]
+    assert contract.get_proposal_ids(1, 2) == ["proposal-2", "proposal-3"]
+    assert contract.get_proposal_ids(2, 50) == ["proposal-3"]
+    assert contract.get_proposal_ids(3, 1) == []
+    assert contract.get_proposal_ids(99, 1) == []
+
+
+def test_proposal_index_rejects_invalid_pagination(
+    direct_vm, direct_deploy
+):
+    contract = _deploy(direct_vm, direct_deploy)
+
+    with direct_vm.expect_revert("Offset cannot be negative"):
+        contract.get_proposal_ids(-1, 1)
+    with direct_vm.expect_revert("Limit must be between 1 and 50"):
+        contract.get_proposal_ids(0, 0)
+    with direct_vm.expect_revert("Limit must be between 1 and 50"):
+        contract.get_proposal_ids(0, 51)
 
 
 def test_commit_enforces_bounty_duration_and_https(
@@ -512,6 +591,11 @@ def test_revision_creates_fresh_review_and_lineage(
     assert int(revised.bounty) == 300
     assert int(revised.bond) == 1_000
     assert int(revised.challenge_deadline) - int(revised.opened_at) == 60
+    assert contract.get_proposal_count() == 2
+    assert contract.get_proposal_ids(0, 50) == [
+        "treasury-pool-001",
+        "treasury-pool-002",
+    ]
 
 
 def test_revision_allows_only_one_direct_replacement(

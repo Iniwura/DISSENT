@@ -65,6 +65,7 @@ class Dissent(gl.contract.Contract):
     minimum_bounty: gl.u256
     minimum_stake: gl.u256
     proposals: gl.storage.TreeMap[str, Proposal]
+    proposal_ids: gl.storage.DynArray[str]
     challenges: gl.storage.TreeMap[str, Challenge]
     proposal_challenges: gl.storage.TreeMap[str, gl.storage.TreeMap[gl.u256, str]]
     challenger_used: gl.storage.TreeMap[str, gl.storage.TreeMap[gl.Address, bool]]
@@ -154,6 +155,7 @@ class Dissent(gl.contract.Contract):
             revision_number=gl.u256(revision_number),
             superseded_by="",
         )
+        self.proposal_ids.append(proposal_id)
 
     def _challenge_ids(self, proposal: Proposal) -> list[str]:
         result = []
@@ -467,6 +469,29 @@ under the current proposal.
     @gl.public.view
     def get_proposal(self, proposal_id: str) -> Proposal:
         return self.proposals[proposal_id]
+
+    @gl.public.view
+    def get_proposal_count(self) -> int:
+        return len(self.proposal_ids)
+
+    @gl.public.view
+    def get_proposal_ids(self, offset: int, limit: int) -> list[str]:
+        if offset < 0:
+            raise gl.vm.UserError("Offset cannot be negative")
+        if limit < 1 or limit > 50:
+            raise gl.vm.UserError("Limit must be between 1 and 50")
+
+        total = len(self.proposal_ids)
+        if offset >= total:
+            return []
+
+        end = min(offset + limit, total)
+        result = []
+        index = offset
+        while index < end:
+            result.append(self.proposal_ids[index])
+            index += 1
+        return result
 
     @gl.public.view
     def get_challenge(self, challenge_id: str) -> Challenge:
