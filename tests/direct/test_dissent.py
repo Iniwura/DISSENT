@@ -13,7 +13,15 @@ def _deploy(vm, deploy):
     return deploy(CONTRACT, 300, 100)
 
 
-def _commit(contract, vm, proposer, bounty=300, total=1_300, review_seconds=60):
+def _commit(
+    contract,
+    vm,
+    proposer,
+    execution_recipient=None,
+    bounty=300,
+    total=1_300,
+    review_seconds=60,
+):
     vm.sender = proposer
     vm.value = total
     contract.commit(
@@ -22,6 +30,7 @@ def _commit(contract, vm, proposer, bounty=300, total=1_300, review_seconds=60):
         "Earn yield without exposing principal to unilateral control",
         "Block if an anonymous party can upgrade or drain the pool",
         "https://proposal.example/pool",
+        to_hex(execution_recipient or proposer),
         bounty,
         review_seconds,
     )
@@ -53,6 +62,41 @@ def _mock_sources(vm):
     )
 
 
+def _mock_single_challenge_verdict(vm, verdict, challenge_id="upgrade-key"):
+    _mock_sources(vm)
+    vm.mock_llm(
+        r".*",
+        json.dumps(
+            {
+                "verdict": verdict,
+                "summary": f"{verdict} verdict for the test proposal.",
+                "decisions": [
+                    {
+                        "id": challenge_id,
+                        "status": "ACCEPTED" if verdict != "CLEAR" else "REJECTED",
+                        "reasoning": "The test decision is evidence-backed.",
+                    }
+                ],
+            }
+        ).encode(),
+    )
+
+
+def _resolve_with_one_challenge(contract, vm, proposer, challenger, verdict):
+    _commit(contract, vm, proposer)
+    _challenge(
+        contract,
+        vm,
+        challenger,
+        "upgrade-key",
+        "The anonymous owner can upgrade the pool implementation",
+        "https://explorer.example/proxy",
+    )
+    _mock_single_challenge_verdict(vm, verdict)
+    vm.warp(AFTER_DEADLINE)
+    contract.adjudicate("treasury-pool-001")
+
+
 def test_config_is_exposed(direct_vm, direct_deploy):
     contract = _deploy(direct_vm, direct_deploy)
     assert contract.get_config() == {
@@ -76,6 +120,11 @@ def test_commit_opens_timed_round_and_splits_value(
     assert int(proposal.bounty) == 300
     assert int(proposal.challenge_deadline) - int(proposal.opened_at) == 60
     assert proposal.proposer.as_hex == to_hex(direct_alice)
+    assert proposal.execution_recipient.as_hex == to_hex(direct_alice)
+    assert proposal.parent_proposal_id == ""
+    assert int(proposal.revision_number) == 0
+    assert proposal.superseded_by == ""
+    assert int(proposal.executed_at) == 0
     assert contract.can_execute("treasury-pool-001") is False
 
 
@@ -87,11 +136,17 @@ def test_commit_enforces_bounty_duration_and_https(
     direct_vm.value = 1_300
 
     with direct_vm.expect_revert("Bounty is below the contract minimum"):
-        contract.commit("p-1", "act", "goal", "policy", "https://source", 299, 60)
+        contract.commit(
+            "p-1", "act", "goal", "policy", "https://source", to_hex(direct_alice), 299, 60
+        )
     with direct_vm.expect_revert("Review duration is outside allowed bounds"):
-        contract.commit("p-2", "act", "goal", "policy", "https://source", 300, 59)
+        contract.commit(
+            "p-2", "act", "goal", "policy", "https://source", to_hex(direct_alice), 300, 59
+        )
     with direct_vm.expect_revert("Evidence URL must use HTTPS"):
-        contract.commit("p-3", "act", "goal", "policy", "http://source", 300, 60)
+        contract.commit(
+            "p-3", "act", "goal", "policy", "http://source", to_hex(direct_alice), 300, 60
+        )
 
 
 def test_challenge_records_stake_and_contract_owned_order(
@@ -190,7 +245,99 @@ def test_no_challenge_round_clears_without_llm_cost(
 
     assert contract.get_proposal("treasury-pool-001").status == "CLEAR"
     assert contract.can_execute("treasury-pool-001") is True
-    assert contract.get_credit(to_hex(direct_alice)) == 1_300
+    assert contract.get_credit(to_hex(direct_alice)) == 300
+    assert int(contract.get_proposal("treasury-pool-001").bond) == 1_000
+
+
+def test_premature_execution_is_rejected(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice)
+    direct_vm.sender = direct_alice
+
+    with direct_vm.expect_revert("Proposal is not CLEAR"):
+        contract.execute("treasury-pool-001")
+
+    proposal = contract.get_proposal("treasury-pool-001")
+    assert proposal.status == "OPEN"
+    assert int(proposal.bond) == 1_000
+    assert int(proposal.executed_at) == 0
+
+
+def test_blocked_execution_is_rejected(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _resolve_with_one_challenge(contract, direct_vm, direct_alice, direct_bob, "BLOCK")
+    direct_vm.sender = direct_alice
+
+    with direct_vm.expect_revert("Proposal is not CLEAR"):
+        contract.execute("treasury-pool-001")
+
+    assert contract.get_proposal("treasury-pool-001").status == "BLOCK"
+    assert contract.can_execute("treasury-pool-001") is False
+
+
+def test_non_proposer_cannot_execute(direct_vm, direct_deploy, direct_alice, direct_bob):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice)
+    direct_vm.warp(AFTER_DEADLINE)
+    contract.adjudicate("treasury-pool-001")
+    direct_vm.sender = direct_bob
+
+    with direct_vm.expect_revert("Only proposer can execute"):
+        contract.execute("treasury-pool-001")
+
+    assert contract.get_proposal("treasury-pool-001").status == "CLEAR"
+
+
+def test_execute_releases_bond_to_stored_recipient(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(
+        contract,
+        direct_vm,
+        direct_alice,
+        execution_recipient=direct_bob,
+    )
+    direct_vm.warp(AFTER_DEADLINE)
+    contract.adjudicate("treasury-pool-001")
+    assert int(contract.get_proposal("treasury-pool-001").bond) == 1_000
+
+    emitted = {}
+
+    def capture_transfer(_vm, request):
+        emitted.update(request)
+        return {"ok": None}
+
+    direct_vm._gl_call_hook = capture_transfer
+    direct_vm.sender = direct_alice
+    contract.execute("treasury-pool-001")
+
+    proposal = contract.get_proposal("treasury-pool-001")
+    assert proposal.status == "EXECUTED"
+    assert proposal.execution_recipient.as_hex == to_hex(direct_bob)
+    assert int(proposal.bond) == 0
+    assert int(proposal.executed_at) == int(proposal.resolved_at)
+    transfer = emitted["EmitInternalMessage"]
+    assert transfer["address"].as_hex == to_hex(direct_bob)
+    assert int(transfer["value"]) == 1_000
+    assert contract.can_execute("treasury-pool-001") is False
+
+
+def test_executed_proposal_cannot_be_replayed(direct_vm, direct_deploy, direct_alice):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice)
+    direct_vm.warp(AFTER_DEADLINE)
+    contract.adjudicate("treasury-pool-001")
+    direct_vm._gl_call_hook = lambda _vm, _request: {"ok": None}
+    direct_vm.sender = direct_alice
+    contract.execute("treasury-pool-001")
+
+    with direct_vm.expect_revert("Proposal is not CLEAR"):
+        contract.execute("treasury-pool-001")
+
+    assert contract.get_proposal("treasury-pool-001").status == "EXECUTED"
 
 
 def test_block_rewards_material_challenger_and_slashes_noise(
@@ -244,8 +391,8 @@ def test_block_rewards_material_challenger_and_slashes_noise(
     assert contract.can_execute("treasury-pool-001") is False
     assert contract.get_challenge("upgrade-key").status == "ACCEPTED"
     assert contract.get_challenge("crypto-risky").status == "REJECTED"
-    assert contract.get_credit(to_hex(direct_alice)) == 1_000
-    assert contract.get_credit(to_hex(direct_bob)) == 500
+    assert contract.get_credit(to_hex(direct_alice)) == 1_100
+    assert contract.get_credit(to_hex(direct_bob)) == 400
     assert contract.get_credit(to_hex(direct_charlie)) == 0
 
 
@@ -284,8 +431,121 @@ def test_clear_returns_bounty_and_rejected_stake_to_proposer(
     contract.adjudicate("treasury-pool-001")
 
     assert contract.get_proposal("treasury-pool-001").status == "CLEAR"
-    assert contract.get_credit(to_hex(direct_alice)) == 1_400
+    assert contract.get_credit(to_hex(direct_alice)) == 400
+    assert int(contract.get_proposal("treasury-pool-001").bond) == 1_000
     assert contract.get_credit(to_hex(direct_bob)) == 0
+
+
+def test_revision_requires_proposer_and_revise_verdict(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _resolve_with_one_challenge(contract, direct_vm, direct_alice, direct_bob, "REVISE")
+    direct_vm.sender = direct_bob
+    direct_vm.value = 1_300
+    with direct_vm.expect_revert("Only proposer can revise"):
+        contract.revise(
+            "treasury-pool-001",
+            "treasury-pool-002",
+            "Revised action",
+            "Revised objective",
+            "Revised policy",
+            "https://proposal.example/revised",
+            to_hex(direct_bob),
+            300,
+            60,
+        )
+
+
+def test_revision_is_rejected_before_revise_verdict(
+    direct_vm, direct_deploy, direct_alice
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _commit(contract, direct_vm, direct_alice)
+    direct_vm.sender = direct_alice
+    direct_vm.value = 1_300
+
+    with direct_vm.expect_revert("Proposal is not open for revision"):
+        contract.revise(
+            "treasury-pool-001",
+            "treasury-pool-002",
+            "Revised action",
+            "Revised objective",
+            "Revised policy",
+            "https://proposal.example/revised",
+            to_hex(direct_alice),
+            300,
+            60,
+        )
+
+
+def test_revision_creates_fresh_review_and_lineage(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _resolve_with_one_challenge(contract, direct_vm, direct_alice, direct_bob, "REVISE")
+    assert contract.get_credit(to_hex(direct_alice)) == 1_000
+    assert contract.get_credit(to_hex(direct_bob)) == 400
+    direct_vm.sender = direct_alice
+    direct_vm.value = 1_300
+    contract.revise(
+        "treasury-pool-001",
+        "treasury-pool-002",
+        "Revised action",
+        "Revised objective",
+        "Revised policy",
+        "https://proposal.example/revised",
+        to_hex(direct_bob),
+        300,
+        60,
+    )
+
+    parent = contract.get_proposal("treasury-pool-001")
+    revised = contract.get_proposal("treasury-pool-002")
+    assert parent.status == "REVISE"
+    assert parent.superseded_by == "treasury-pool-002"
+    assert revised.parent_proposal_id == "treasury-pool-001"
+    assert int(revised.revision_number) == 1
+    assert revised.superseded_by == ""
+    assert revised.status == "OPEN"
+    assert revised.execution_recipient.as_hex == to_hex(direct_bob)
+    assert int(revised.bounty) == 300
+    assert int(revised.bond) == 1_000
+    assert int(revised.challenge_deadline) - int(revised.opened_at) == 60
+
+
+def test_revision_allows_only_one_direct_replacement(
+    direct_vm, direct_deploy, direct_alice, direct_bob
+):
+    contract = _deploy(direct_vm, direct_deploy)
+    _resolve_with_one_challenge(contract, direct_vm, direct_alice, direct_bob, "REVISE")
+    direct_vm.sender = direct_alice
+    direct_vm.value = 1_300
+    contract.revise(
+        "treasury-pool-001",
+        "treasury-pool-002",
+        "Revised action",
+        "Revised objective",
+        "Revised policy",
+        "https://proposal.example/revised",
+        to_hex(direct_alice),
+        300,
+        60,
+    )
+
+    direct_vm.value = 1_300
+    with direct_vm.expect_revert("Proposal already superseded"):
+        contract.revise(
+            "treasury-pool-001",
+            "treasury-pool-003",
+            "Second revised action",
+            "Second revised objective",
+            "Second revised policy",
+            "https://proposal.example/revised-2",
+            to_hex(direct_alice),
+            300,
+            60,
+        )
 
 
 def test_rejects_clear_verdict_with_accepted_challenge(

@@ -12,6 +12,7 @@ OPEN = "OPEN"
 CLEAR = "CLEAR"
 REVISE = "REVISE"
 BLOCK = "BLOCK"
+EXECUTED = "EXECUTED"
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
 
@@ -26,6 +27,7 @@ MAX_SOURCE_CHARS = 12_000
 class Proposal:
     id: str
     proposer: gl.Address
+    execution_recipient: gl.Address
     action: str
     objective: str
     policy: str
@@ -38,6 +40,10 @@ class Proposal:
     resolved_at: gl.u256
     challenge_count: gl.u256
     resolution: str
+    executed_at: gl.u256
+    parent_proposal_id: str
+    revision_number: gl.u256
+    superseded_by: str
 
 
 @allow_storage
@@ -91,6 +97,64 @@ class Dissent(gl.contract.Contract):
         current = self.credits.get(recipient, gl.u256(0))
         self.credits[recipient] = gl.u256(int(current) + int(amount))
 
+    def _open_proposal(
+        self,
+        proposal_id: str,
+        action: str,
+        objective: str,
+        policy: str,
+        evidence_url: str,
+        execution_recipient: str,
+        bounty: int,
+        review_seconds: int,
+        parent_proposal_id: str = "",
+        revision_number: int = 0,
+    ) -> None:
+        self._require_text(proposal_id, "proposal_id", 80)
+        self._require_text(action, "action", 2000)
+        self._require_text(objective, "objective", 1200)
+        self._require_text(policy, "policy", 4000)
+        self._require_evidence_url(evidence_url)
+        self._require_text(execution_recipient, "execution_recipient", 42)
+        if proposal_id in self.proposals:
+            raise gl.vm.UserError("Proposal already exists")
+        if bounty < int(self.minimum_bounty):
+            raise gl.vm.UserError("Bounty is below the contract minimum")
+        if review_seconds < MIN_REVIEW_SECONDS or review_seconds > MAX_REVIEW_SECONDS:
+            raise gl.vm.UserError("Review duration is outside allowed bounds")
+
+        try:
+            recipient = gl.Address(execution_recipient.strip())
+        except Exception:
+            raise gl.vm.UserError("Invalid execution recipient")
+
+        paid = int(gl.message.value)
+        if paid <= bounty:
+            raise gl.vm.UserError("Value must cover a bounty and execution bond")
+
+        opened_at = self._now()
+        self.proposals[proposal_id] = Proposal(
+            id=proposal_id,
+            proposer=gl.message.sender_address,
+            execution_recipient=recipient,
+            action=action.strip(),
+            objective=objective.strip(),
+            policy=policy.strip(),
+            evidence_url=evidence_url.strip(),
+            status=OPEN,
+            bond=gl.u256(paid - bounty),
+            bounty=gl.u256(bounty),
+            opened_at=gl.u256(opened_at),
+            challenge_deadline=gl.u256(opened_at + review_seconds),
+            resolved_at=gl.u256(0),
+            challenge_count=gl.u256(0),
+            resolution="",
+            executed_at=gl.u256(0),
+            parent_proposal_id=parent_proposal_id,
+            revision_number=gl.u256(revision_number),
+            superseded_by="",
+        )
+
     def _challenge_ids(self, proposal: Proposal) -> list[str]:
         result = []
         index = 0
@@ -107,42 +171,59 @@ class Dissent(gl.contract.Contract):
         objective: str,
         policy: str,
         evidence_url: str,
+        execution_recipient: str,
         bounty: int,
         review_seconds: int,
     ) -> None:
-        self._require_text(proposal_id, "proposal_id", 80)
-        self._require_text(action, "action", 2000)
-        self._require_text(objective, "objective", 1200)
-        self._require_text(policy, "policy", 4000)
-        self._require_evidence_url(evidence_url)
-        if proposal_id in self.proposals:
-            raise gl.vm.UserError("Proposal already exists")
-        if bounty < int(self.minimum_bounty):
-            raise gl.vm.UserError("Bounty is below the contract minimum")
-        if review_seconds < MIN_REVIEW_SECONDS or review_seconds > MAX_REVIEW_SECONDS:
-            raise gl.vm.UserError("Review duration is outside allowed bounds")
-
-        paid = int(gl.message.value)
-        if paid <= bounty:
-            raise gl.vm.UserError("Value must cover a bounty and execution bond")
-
-        opened_at = self._now()
-        self.proposals[proposal_id] = Proposal(
-            id=proposal_id,
-            proposer=gl.message.sender_address,
-            action=action.strip(),
-            objective=objective.strip(),
-            policy=policy.strip(),
-            evidence_url=evidence_url.strip(),
-            status=OPEN,
-            bond=gl.u256(paid - bounty),
-            bounty=gl.u256(bounty),
-            opened_at=gl.u256(opened_at),
-            challenge_deadline=gl.u256(opened_at + review_seconds),
-            resolved_at=gl.u256(0),
-            challenge_count=gl.u256(0),
-            resolution="",
+        self._open_proposal(
+            proposal_id,
+            action,
+            objective,
+            policy,
+            evidence_url,
+            execution_recipient,
+            bounty,
+            review_seconds,
         )
+
+    @gl.public.write.payable
+    def revise(
+        self,
+        parent_proposal_id: str,
+        proposal_id: str,
+        action: str,
+        objective: str,
+        policy: str,
+        evidence_url: str,
+        execution_recipient: str,
+        bounty: int,
+        review_seconds: int,
+    ) -> None:
+        self._require_text(parent_proposal_id, "parent_proposal_id", 80)
+        if parent_proposal_id not in self.proposals:
+            raise gl.vm.UserError("Parent proposal not found")
+
+        parent = self.proposals[parent_proposal_id]
+        if gl.message.sender_address != parent.proposer:
+            raise gl.vm.UserError("Only proposer can revise")
+        if parent.status != REVISE:
+            raise gl.vm.UserError("Proposal is not open for revision")
+        if parent.superseded_by:
+            raise gl.vm.UserError("Proposal already superseded")
+
+        self._open_proposal(
+            proposal_id,
+            action,
+            objective,
+            policy,
+            evidence_url,
+            execution_recipient,
+            bounty,
+            review_seconds,
+            parent_proposal_id,
+            int(parent.revision_number) + 1,
+        )
+        parent.superseded_by = proposal_id
 
     @gl.public.write.payable
     def challenge(
@@ -314,17 +395,17 @@ under the current proposal.
             else:
                 rejected_stakes += int(challenge.stake)
 
-        self._credit(proposal.proposer, proposal.bond)
+        if result["verdict"] != CLEAR:
+            self._credit(proposal.proposer, proposal.bond)
         if len(accepted) == 0:
             self._credit(
                 proposal.proposer, gl.u256(int(proposal.bounty) + rejected_stakes)
             )
             return
 
-        reward_pool = int(proposal.bounty) + rejected_stakes
-        reward_share = reward_pool // len(accepted)
-        remainder = reward_pool - (reward_share * len(accepted))
-        self._credit(proposal.proposer, gl.u256(remainder))
+        reward_share = int(proposal.bounty) // len(accepted)
+        remainder = int(proposal.bounty) - (reward_share * len(accepted))
+        self._credit(proposal.proposer, gl.u256(rejected_stakes + remainder))
         for challenge_id in accepted:
             challenge = self.challenges[challenge_id]
             self._credit(
@@ -356,6 +437,22 @@ under the current proposal.
         proposal.resolution = result["summary"]
         proposal.resolved_at = gl.u256(self._now())
         self._settle(proposal, result, challenge_ids)
+
+    @gl.public.write
+    def execute(self, proposal_id: str) -> None:
+        if proposal_id not in self.proposals:
+            raise gl.vm.UserError("Proposal not found")
+        proposal = self.proposals[proposal_id]
+        if proposal.status != CLEAR:
+            raise gl.vm.UserError("Proposal is not CLEAR")
+        if gl.message.sender_address != proposal.proposer:
+            raise gl.vm.UserError("Only proposer can execute")
+
+        bond = proposal.bond
+        proposal.status = EXECUTED
+        proposal.executed_at = gl.u256(self._now())
+        proposal.bond = gl.u256(0)
+        gl.contract.get_at(proposal.execution_recipient).emit_transfer(value=bond)
 
     @gl.public.view
     def get_config(self) -> dict:

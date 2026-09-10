@@ -9,8 +9,12 @@
       body { max-width: 960px; margin: 40px auto; padding: 0 20px; background: #101418; color: #e8edf2; }
       button { margin: 8px 8px 8px 0; padding: 10px 14px; border: 0; border-radius: 6px; cursor: pointer; }
       button:disabled { cursor: not-allowed; opacity: .45; }
-      #connect { background: #8fd3ff; color: #07121b; }
-      #run { background: #a5e887; color: #0a1805; }
+      #connect-proposer, #connect-challenger { background: #8fd3ff; color: #07121b; }
+      #run-no-challenge, #run-challenged, #run-full { background: #a5e887; color: #0a1805; }
+      .controls { display: grid; gap: 12px; margin: 20px 0; }
+      .mode { display: grid; gap: 6px; max-width: 760px; }
+      input, select { padding: 9px; border: 1px solid #465662; border-radius: 6px; background: #070a0d; color: #e8edf2; font: inherit; }
+      .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
       pre { min-height: 260px; padding: 16px; overflow: auto; white-space: pre-wrap; background: #070a0d; border: 1px solid #29343d; border-radius: 8px; }
       .warning { color: #ffd27d; }
     </style>
@@ -19,11 +23,29 @@
     <h1>Dissent Studio-dev E2E Harness</h1>
     <p class="warning">
       This page is isolated from the application frontend. It never submits on load.
-      The second button deploys a fresh contract and submits the lifecycle scenarios only
-      after an explicit click.
+      Connect only the proposer for the no-challenge flow. The challenged flows require
+      a separate funded challenger account.
     </p>
-    <button id="connect" type="button">Connect two wallet accounts</button>
-    <button id="run" type="button" disabled>Run isolated E2E</button>
+    <div class="controls">
+      <label class="mode" for="mode">
+        Contract mode
+        <select id="mode">
+          <option value="existing" selected>Existing contract</option>
+          <option value="fresh">Fresh deployment</option>
+        </select>
+      </label>
+      <label class="mode" for="contract-address">
+        Existing contract address
+        <input id="contract-address" value="0x5D954f5a4216d63853AE9d9B2e6b563AEB7dc423" spellcheck="false" />
+      </label>
+      <div class="buttons">
+        <button id="connect-proposer" type="button">Connect proposer</button>
+        <button id="run-no-challenge" type="button" disabled>Run no-challenge</button>
+        <button id="connect-challenger" type="button" disabled>Connect challenger</button>
+        <button id="run-challenged" type="button" disabled>Run challenged</button>
+        <button id="run-full" type="button" disabled>Run full E2E</button>
+      </div>
+    </div>
     <pre id="status" aria-live="polite">Wallet not connected.</pre>
     <script type="module" src="/tests/integration/studio-dev-browser/main.js"></script>
   </body>
