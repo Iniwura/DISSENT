@@ -1,0 +1,32 @@
+{
+  "network": "studio-dev",
+  "chainId": 61997,
+  "contractAddress": "0xcf68E576cEdAD0ff5b6DA746Cc099A3B1421F13F",
+  "deploymentTransaction": "0x20afb5e2d0f68913169a81dd237cfe43e01397680de856f04b621aed8e0074b2",
+  "sourceCommit": "eac9efea391fe712343a92ab1b7004d53ba3bdcd",
+  "constructor": {
+    "minimumBounty": "1000000000000000000",
+    "minimumStake": "100000000000000000",
+    "minimumExecutionBond": "1000000000000000000"
+  },
+  "smokeProposals": [
+    {
+      "proposalId": "dissent-final-clear-20260911-01",
+      "status": "EXECUTED"
+    },
+    {
+      "proposalId": "dissent-final-challenged-20260911-01",
+      "status": "REVISE"
+    },
+    {
+      "proposalId": "dissent-final-challenged-20260911-01-r1",
+      "status": "EXECUTED"
+    }
+  ],
+  "finalSmoke": {
+    "proposalCount": 3,
+    "totalOutstandingEscrow": "0",
+    "totalSettledCredits": "4000000000000000000",
+    "canExecuteRevision1": false
+  }
+}

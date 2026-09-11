@@ -198,3 +198,10 @@ challenged settlement. It does not submit or verify an external payout. Dissent
 does not stop actions performed outside the opt-in gate and does not execute
 arbitrary textual actions. Prompt-injection resistance is bounded validation,
 not a proof that malicious prose can never influence an LLM.
+
+## Verified Studio-dev deployment
+
+The verified release-candidate deployment is at
+`0xcf68E576cEdAD0ff5b6DA746Cc099A3B1421F13F` on Studio-dev (chain ID `61997`),
+from source commit `eac9efea391fe712343a92ab1b7004d53ba3bdcd`. Credits are
+reusable inside Dissent but are not wallet-withdrawable in this RC.

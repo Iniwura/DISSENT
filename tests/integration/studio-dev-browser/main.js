@@ -4,6 +4,7 @@ import { ExecutionResult, TransactionHashVariant } from "genlayer-js/types";
 
 const CONTRACT_URL = "/contracts/dissent.py";
 const STORAGE_KEY = "dissent-studio-dev-e2e:v2";
+const DEFAULT_CONTRACT_ADDRESS = "0xcf68E576cEdAD0ff5b6DA746Cc099A3B1421F13F";
 const MOCK_PROVIDER_MODE = new URLSearchParams(window.location.search).get("mock-provider") === "1";
 const MOCK_ACCOUNT = "0x0000000000000000000000000000000000000001";
 const CHAIN_ID_HEX = `0x${studioDevnet.id.toString(16)}`;
@@ -59,7 +60,7 @@ const emptyScenario = () => ({
 function initialState() {
   return {
     mode: "existing",
-    contractAddress: null,
+    contractAddress: DEFAULT_CONTRACT_ADDRESS,
     proposer: null,
     challenger: null,
     deployment: { status: "idle", txHash: null },
