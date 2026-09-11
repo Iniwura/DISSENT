@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from agents.models import Opportunity
+from agents.models import ChallengeIntent, Opportunity, ProposalIntent
 from agents.network import LocalEvidenceReader, MarketSkeptic, ProxySentinel, ReviewNetwork, TreasuryAgent
 from agents.run_demo import build_demo
 
@@ -44,6 +44,54 @@ def test_proxy_sentinel_submits_only_for_unprotected_upgrade_key(tmp_path, oppor
     assert challenge.challenge_id == "upgrade-key"
     assert challenge.predicted_materiality == "CRITICAL"
     assert challenge.contract_call()["value"] == 100
+    assert proposal.contract_call()["args"][5] == proposal.execution_recipient
+    assert proposal.contract_call()["value"] == 1_300
+    assert proposal.bond >= 1_000
+
+
+def test_agent_calls_subtract_reused_credit_from_native_value(opportunity):
+    proposal = TreasuryAgent().propose(opportunity)
+    credited_proposal = ProposalIntent(
+        proposal_id=proposal.proposal_id,
+        action=proposal.action,
+        objective=proposal.objective,
+        policy=proposal.policy,
+        evidence_url=proposal.evidence_url,
+        execution_recipient=proposal.execution_recipient,
+        bounty=proposal.bounty,
+        bond=proposal.bond,
+        review_seconds=proposal.review_seconds,
+        credit_amount=300,
+    )
+    challenge = ChallengeIntent(
+        proposal_id=proposal.proposal_id,
+        challenge_id="credit-challenge",
+        agent="challenger",
+        objection="Specific objection",
+        evidence_url="https://example.com/challenge",
+        stake=100,
+        confidence=0.9,
+        predicted_materiality="MATERIAL",
+        credit_amount=100,
+    )
+
+    assert credited_proposal.contract_call()["value"] == 1_000
+    assert challenge.contract_call()["value"] == 0
+
+
+def test_proposal_model_rejects_below_minimum_execution_bond(opportunity):
+    with pytest.raises(ValueError, match="below the contract minimum"):
+        ProposalIntent(
+            proposal_id="too-small",
+            action=opportunity.action,
+            objective=opportunity.objective,
+            policy=opportunity.policy,
+            evidence_url=opportunity.evidence_url,
+            execution_recipient="0x1111111111111111111111111111111111111111",
+            bounty=300,
+            bond=999,
+            review_seconds=60,
+        )
 
 
 def test_proxy_sentinel_abstains_when_timelock_protects_upgrade(tmp_path, opportunity):
@@ -93,6 +141,9 @@ def test_review_network_produces_separate_signed_calls(opportunity, tmp_path):
         "settlement-keeper",
     ]
     assert plan[0]["function"] == "commit"
+    assert plan[0]["args"][5] == review.proposal.execution_recipient
+    assert plan[0]["args"][-1] == 0
+    assert plan[0]["value"] == 1_300
     assert plan[-1]["function"] == "adjudicate"
     assert plan[-1]["not_before_seconds"] == 60
 

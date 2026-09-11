@@ -3,7 +3,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .models import ChallengeIntent, Opportunity, ProposalIntent, ReviewRun
+from .models import (
+    MINIMUM_EXECUTION_BOND,
+    ChallengeIntent,
+    Opportunity,
+    ProposalIntent,
+    ReviewRun,
+)
 
 
 class EvidenceReader(Protocol):
@@ -38,9 +44,11 @@ class TreasuryAgent:
             objective=opportunity.objective,
             policy=opportunity.policy,
             evidence_url=opportunity.evidence_url,
+            execution_recipient="0x1111111111111111111111111111111111111111",
             bounty=300,
-            bond=1_000,
+            bond=MINIMUM_EXECUTION_BOND,
             review_seconds=60,
+            credit_amount=0,
         )
 
 
@@ -72,6 +80,7 @@ class ProxySentinel:
             stake=100,
             confidence=0.98,
             predicted_materiality="CRITICAL",
+            credit_amount=0,
         )
 
 
@@ -94,6 +103,7 @@ class MarketSkeptic:
             stake=100,
             confidence=0.42,
             predicted_materiality="WEAK",
+            credit_amount=0,
         )
 
 

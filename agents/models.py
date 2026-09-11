@@ -2,6 +2,9 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 
+MINIMUM_EXECUTION_BOND = 1_000
+
+
 @dataclass(frozen=True)
 class Opportunity:
     name: str
@@ -19,9 +22,17 @@ class ProposalIntent:
     objective: str
     policy: str
     evidence_url: str
+    execution_recipient: str
     bounty: int
     bond: int
     review_seconds: int
+    credit_amount: int = 0
+
+    def __post_init__(self) -> None:
+        if self.bond < MINIMUM_EXECUTION_BOND:
+            raise ValueError("Execution bond is below the contract minimum")
+        if self.credit_amount < 0 or self.credit_amount > self.bounty + self.bond:
+            raise ValueError("Credit amount exceeds planned proposal funding")
 
     def contract_call(self) -> dict[str, Any]:
         return {
@@ -32,10 +43,12 @@ class ProposalIntent:
                 self.objective,
                 self.policy,
                 self.evidence_url,
+                self.execution_recipient,
                 self.bounty,
                 self.review_seconds,
+                self.credit_amount,
             ],
-            "value": self.bond + self.bounty,
+            "value": self.bond + self.bounty - self.credit_amount,
         }
 
 
@@ -49,6 +62,11 @@ class ChallengeIntent:
     stake: int
     confidence: float
     predicted_materiality: Literal["CRITICAL", "MATERIAL", "WEAK"]
+    credit_amount: int = 0
+
+    def __post_init__(self) -> None:
+        if self.credit_amount < 0 or self.credit_amount > self.stake:
+            raise ValueError("Credit amount exceeds planned challenge stake")
 
     def contract_call(self) -> dict[str, Any]:
         return {
@@ -58,8 +76,9 @@ class ChallengeIntent:
                 self.challenge_id,
                 self.objection,
                 self.evidence_url,
+                self.credit_amount,
             ],
-            "value": self.stake,
+            "value": self.stake - self.credit_amount,
         }
 
     def to_dict(self) -> dict[str, Any]:

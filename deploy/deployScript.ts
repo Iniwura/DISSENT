@@ -19,7 +19,8 @@ export default async function main(client: GenLayerClient<any>) {
 
     const deployTransaction = await client.deployContract({
       code: contractCode,
-      args: [300, 100],
+      // Constructor ABI remains (minimum_bounty, minimum_stake, minimum_execution_bond).
+      args: [300, 100, 1_000],
     });
 
     const receipt = await client.waitForTransactionReceipt({

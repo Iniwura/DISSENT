@@ -6,11 +6,12 @@ SDK's `studioDevnet` chain definition, and the browser wallet exposed as
 `window.ethereum`.
 
 It is intentionally separate from the normal pytest/gltest suite. The page
-does nothing on load and defaults to the existing deployed contract
-`0x5D954f5a4216d63853AE9d9B2e6b563AEB7dc423`. A user must explicitly connect
-the proposer before any wallet request is made. The no-challenge flow needs
-only that one funded account; challenged flows additionally require a second,
-distinct funded challenger.
+does nothing on load. Existing-contract mode requires the user to paste the
+address of the intended deployment; fresh mode deploys the contract only after
+the user starts a staged run. A user must explicitly connect the proposer
+before any wallet request is made. The no-challenge flow needs only that one
+funded account; challenged flows additionally require a second, distinct funded
+challenger.
 
 From WSL at the repository root:
 
@@ -33,12 +34,21 @@ scenario; **Existing contract** is the default. The harness verifies:
 
 1. deployment when fresh mode is selected, or `get_config` on the existing contract;
 2. commit and no-challenge adjudication;
-3. the CLEAR execution gate and proposer credit withdrawal;
+3. the CLEAR execution gate and settled Dissent credit after execution;
 4. a separate commit and challenge;
 5. challenged adjudication, including the contract's web and LLM branch.
 
 Each write estimates fees through `genlayer-js` and passes both
-`distribution` and `feeValue`. Reads request `latest-nonfinal` state.
+`distribution` and `feeValue`. Writes wait for finalization and reads request
+`latest-final` state. The harness verifies the on-chain Dissent credit ledger
+after execution and challenged settlement; it does not submit an external
+payout or infer wallet delivery. The `commit`, `revise`, and `challenge` ABI
+payloads end with an explicit `credit_amount`; this harness uses `0` and funds
+its scenarios externally. Settled credits are reusable inside Dissent, but
+there is no wallet cashout in this RC. A permissionless `cancel` write is an
+exceptional seven-day liveness recovery mechanism, not a normal alternative to
+adjudication. It recovers unresolved escrow after prolonged provider or
+consensus failure without web or LLM work.
 Transaction hashes, proposal IDs, deadlines, and step status are saved in
 `localStorage` before waiting, so reloading the page resumes an in-flight
 stage instead of submitting a duplicate transaction.

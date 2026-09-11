@@ -2,7 +2,6 @@ import { createClient, isSuccessful } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import { ExecutionResult, TransactionHashVariant } from "genlayer-js/types";
 
-const DEFAULT_CONTRACT_ADDRESS = "0x5D954f5a4216d63853AE9d9B2e6b563AEB7dc423";
 const CONTRACT_URL = "/contracts/dissent.py";
 const STORAGE_KEY = "dissent-studio-dev-e2e:v2";
 const MOCK_PROVIDER_MODE = new URLSearchParams(window.location.search).get("mock-provider") === "1";
@@ -10,10 +9,12 @@ const MOCK_ACCOUNT = "0x0000000000000000000000000000000000000001";
 const CHAIN_ID_HEX = `0x${studioDevnet.id.toString(16)}`;
 const MINIMUM_BOUNTY = 300;
 const MINIMUM_STAKE = 100;
+const MINIMUM_EXECUTION_BOND = 1_000;
 const BOUNTY = 300;
 const EXECUTION_BOND = 1_000;
 const COMMIT_VALUE = BOUNTY + EXECUTION_BOND;
 const REVIEW_SECONDS = 60;
+const CANCELLATION_GRACE_SECONDS = 604_800;
 const WAIT_INTERVAL_MS = 3_000;
 const WAIT_RETRIES = 240;
 const mockMetrics = { feeEstimateCalls: 0, blockedWriteCalls: 0 };
@@ -50,13 +51,15 @@ const emptyScenario = () => ({
   deadline: null,
   stage: "idle",
   error: null,
+  settledCredit: null,
+  accounting: null,
   txHashes: {},
 });
 
 function initialState() {
   return {
     mode: "existing",
-    contractAddress: DEFAULT_CONTRACT_ADDRESS,
+    contractAddress: null,
     proposer: null,
     challenger: null,
     deployment: { status: "idle", txHash: null },
@@ -114,9 +117,11 @@ function createMockReadClient() {
         return {
           minimum_bounty: MINIMUM_BOUNTY,
           minimum_stake: MINIMUM_STAKE,
+          minimum_execution_bond: MINIMUM_EXECUTION_BOND,
           maximum_challenges: 5,
           minimum_review_seconds: REVIEW_SECONDS,
           maximum_review_seconds: 604_800,
+          cancellation_grace_seconds: CANCELLATION_GRACE_SECONDS,
         };
       }
       throw new Error(`Mock read stopped before live transaction: ${functionName}`);
@@ -184,7 +189,7 @@ function statusSnapshot(message = null) {
 function render(message = null) {
   contractAddressElement.disabled = state.mode !== "existing";
   contractAddressElement.value = state.mode === "existing"
-    ? state.contractAddress || DEFAULT_CONTRACT_ADDRESS
+    ? state.contractAddress || ""
     : "Fresh deployment will be created on the first staged run";
   modeElement.value = state.mode;
   noChallengeButton.disabled = state.busy || !state.proposerConnected;
@@ -335,10 +340,10 @@ async function estimateFees() {
   return { distribution: estimate.distribution, feeValue };
 }
 
-async function waitForAccepted(hash) {
+async function waitForFinalized(hash) {
   const receipt = await state.readClient.waitForTransactionReceipt({
     hash,
-    waitUntil: "decided",
+    waitUntil: "finalized",
     interval: WAIT_INTERVAL_MS,
     retries: WAIT_RETRIES,
   });
@@ -360,7 +365,7 @@ async function readContract(functionName, args = []) {
     address: state.contractAddress,
     functionName,
     args,
-    transactionHashVariant: TransactionHashVariant.LATEST_NONFINAL,
+    transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
   });
 }
 
@@ -371,7 +376,7 @@ async function ensureContract() {
   }
 
   if (state.deployment.txHash) {
-    const receipt = await waitForAccepted(state.deployment.txHash);
+    const receipt = await waitForFinalized(state.deployment.txHash);
     const decoded = receipt.txDataDecoded || {};
     const address = decoded.contractAddress || decoded.contract_address || receipt.recipient;
     if (!address || address.toLowerCase() === "0x0000000000000000000000000000000000000000") {
@@ -389,13 +394,13 @@ async function ensureContract() {
   const hash = await client.deployContract({
     account: state.proposer,
     code,
-    args: [MINIMUM_BOUNTY, MINIMUM_STAKE],
+    args: [MINIMUM_BOUNTY, MINIMUM_STAKE, MINIMUM_EXECUTION_BOND],
     fees: await estimateFees(),
   });
   state.deployment = { status: "submitted", txHash: hash };
   saveState();
   render(`Deployment submitted: ${hash}`);
-  const receipt = await waitForAccepted(hash);
+  const receipt = await waitForFinalized(hash);
   const decoded = receipt.txDataDecoded || {};
   const address = decoded.contractAddress || decoded.contract_address || receipt.recipient;
   if (!address || address.toLowerCase() === "0x0000000000000000000000000000000000000000") {
@@ -412,9 +417,11 @@ function assertConfig(config) {
   const expected = {
     minimum_bounty: MINIMUM_BOUNTY,
     minimum_stake: MINIMUM_STAKE,
+    minimum_execution_bond: MINIMUM_EXECUTION_BOND,
     maximum_challenges: 5,
     minimum_review_seconds: REVIEW_SECONDS,
     maximum_review_seconds: 604_800,
+    cancellation_grace_seconds: CANCELLATION_GRACE_SECONDS,
   };
   for (const [key, value] of Object.entries(expected)) {
     if (numeric(config[key]) !== value) {
@@ -437,8 +444,8 @@ async function submitScenarioStep(scenario, step, account, functionName, args = 
   const savedHash = scenario.txHashes[step];
   if (savedHash) {
     render(`Resuming ${step}: ${savedHash}`);
-    await waitForAccepted(savedHash);
-    scenario.stage = `${step}:accepted`;
+    await waitForFinalized(savedHash);
+    scenario.stage = `${step}:finalized`;
     saveState();
     return savedHash;
   }
@@ -456,8 +463,8 @@ async function submitScenarioStep(scenario, step, account, functionName, args = 
   scenario.stage = `${step}:submitted`;
   saveState();
   render(`${step} submitted: ${hash}`);
-  await waitForAccepted(hash);
-  scenario.stage = `${step}:accepted`;
+  await waitForFinalized(hash);
+  scenario.stage = `${step}:finalized`;
   saveState();
   return hash;
 }
@@ -501,6 +508,7 @@ async function runNoChallenge() {
       state.proposer,
       BOUNTY,
       REVIEW_SECONDS,
+      0,
     ], BigInt(COMMIT_VALUE));
     await waitForDeadline(scenario);
     await submitScenarioStep(scenario, "adjudicate", state.proposer, "adjudicate", [scenario.proposalId]);
@@ -508,7 +516,7 @@ async function runNoChallenge() {
     if (field(proposal, "status") !== "CLEAR" || await readContract("can_execute", [scenario.proposalId]) !== true) {
       throw new Error("No-challenge adjudication did not clear the proposal.");
     }
-    if (numeric(proposal.bond) !== EXECUTION_BOND) {
+    if (numeric(proposal.outstanding_bond) !== EXECUTION_BOND) {
       throw new Error("Execution bond was not retained after clear adjudication.");
     }
     if (numeric(await readContract("get_credit", [state.proposer])) !== BOUNTY) {
@@ -519,10 +527,24 @@ async function runNoChallenge() {
     if (executedProposal.status !== "EXECUTED" || await readContract("can_execute", [scenario.proposalId]) !== false) {
       throw new Error("Execution gate did not release the clear proposal.");
     }
-    await submitScenarioStep(scenario, "withdraw", state.proposer, "withdraw");
-    if (numeric(await readContract("get_credit", [state.proposer])) !== 0) {
-      throw new Error("Withdraw did not clear the proposer credit.");
+    if (numeric(executedProposal.outstanding_bond) !== 0) {
+      throw new Error("Execution did not zero the outstanding bond.");
     }
+    const settledCredit = numeric(await readContract("get_credit", [state.proposer]));
+    if (settledCredit !== BOUNTY + EXECUTION_BOND) {
+      throw new Error("Execution did not create the expected settled Dissent credit.");
+    }
+    const accounting = await readContract("get_accounting");
+    if (numeric(accounting.total_outstanding_escrow) !== 0
+      || numeric(accounting.total_settled_credits) !== BOUNTY + EXECUTION_BOND) {
+      throw new Error("Execution accounting does not show a fully settled Dissent credit.");
+    }
+    scenario.settledCredit = settledCredit;
+    scenario.accounting = {
+      total_outstanding_escrow: String(accounting.total_outstanding_escrow),
+      total_settled_credits: String(accounting.total_settled_credits),
+    };
+    saveState();
     scenario.stage = "complete";
     scenario.error = null;
     saveState();
@@ -560,12 +582,14 @@ async function runChallenged() {
       state.proposer,
       BOUNTY,
       REVIEW_SECONDS,
+      0,
   ], BigInt(COMMIT_VALUE));
   await submitScenarioStep(scenario, "challenge", state.challenger, "challenge", [
     scenario.proposalId,
     scenario.challengeId,
     "The action lacks evidence that control cannot be changed unilaterally",
     "https://example.com",
+    0,
   ], BigInt(MINIMUM_STAKE));
   await waitForDeadline(scenario);
   await submitScenarioStep(scenario, "adjudicate", state.proposer, "adjudicate", [scenario.proposalId]);
@@ -577,6 +601,18 @@ async function runChallenged() {
   if (!["ACCEPTED", "REJECTED"].includes(field(challenge, "status"))) {
     throw new Error(`Unexpected challenge status: ${field(challenge, "status")}`);
   }
+  const accounting = await readContract("get_accounting");
+  const proposerCredit = numeric(await readContract("get_credit", [state.proposer]));
+  const challengerCredit = numeric(await readContract("get_credit", [state.challenger]));
+  if (numeric(accounting.total_settled_credits) <= 0
+    || proposerCredit + challengerCredit !== numeric(accounting.total_settled_credits)) {
+    throw new Error("Challenged settlement did not produce verifiable Dissent credits.");
+  }
+  scenario.settledCredit = { proposer: proposerCredit, challenger: challengerCredit };
+  scenario.accounting = {
+    total_outstanding_escrow: String(accounting.total_outstanding_escrow),
+    total_settled_credits: String(accounting.total_settled_credits),
+  };
   scenario.stage = "complete";
   saveState();
   render("Challenged scenario complete; nondeterministic adjudication was exercised.");
@@ -617,7 +653,7 @@ modeElement.addEventListener("change", () => {
   const nextMode = modeElement.value;
   if (nextMode === state.mode) return;
   state.mode = nextMode;
-  state.contractAddress = nextMode === "existing" ? DEFAULT_CONTRACT_ADDRESS : null;
+  state.contractAddress = null;
   resetProgress("Contract mode changed; staged progress was reset.");
 });
 
@@ -625,11 +661,11 @@ contractAddressElement.addEventListener("change", () => {
   if (state.mode !== "existing") return;
   const nextAddress = contractAddressElement.value.trim();
   if (!isAddress(nextAddress)) {
-    contractAddressElement.value = state.contractAddress || DEFAULT_CONTRACT_ADDRESS;
+    contractAddressElement.value = state.contractAddress || "";
     render("Enter a valid 20-byte contract address.");
     return;
   }
-  if (nextAddress.toLowerCase() !== state.contractAddress.toLowerCase()) {
+  if (!state.contractAddress || nextAddress.toLowerCase() !== state.contractAddress.toLowerCase()) {
     state.contractAddress = nextAddress;
     resetProgress("Existing contract changed; staged progress was reset.");
   }
