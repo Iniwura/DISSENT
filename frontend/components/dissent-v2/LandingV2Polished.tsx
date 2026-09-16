@@ -1,0 +1,54 @@
+'use client';
+
+import Link from 'next/link';
+import { ArrowDownRight, ArrowUpRight, CircleAlert } from 'lucide-react';
+import { configState } from '@/lib/dissent/config';
+import { useDissent } from '@/components/dissent/DissentProvider';
+import { formatWei, shortAddress } from '@/lib/dissent/types';
+import { EditorialAction, EditorialButton, EditorialLabel, GridFrame, MotionReveal, SectionMarker } from './Editorial';
+import { PitchSourceV2 } from './PitchSourceV2';
+
+const stages = [
+  ['01', 'Commit', 'Put the proposed action, evidence and funding on record.'],
+  ['02', 'Challenge', 'A challenger stakes a material objection before the deadline.'],
+  ['03', 'Deliberate', 'Validators inspect the evidence and return structured observations.'],
+  ['04', 'Verdict', 'Adjudication records CLEAR, REVISE or BLOCK.'],
+  ['05', 'Execute', 'Only the proposer can consume a clear, funded execution gate.'],
+] as const;
+
+const evidence = [
+  ['Contract code', 'The deployed implementation and its public state.'],
+  ['Ownership controls', 'Who can call a write and under which state.'],
+  ['Protocol documentation', 'The rule or specification behind the claim.'],
+  ['Transaction history', 'The on-chain record that gives the claim context.'],
+  ['Governance records', 'Approvals, decisions and the authority behind them.'],
+  ['External claims', 'A public source placed in the review record.'],
+] as const;
+
+function LiveReviews({ snapshot, loading, dataError, retry, canRetry }: { snapshot: ReturnType<typeof useDissent>['snapshot']; loading: boolean; dataError: string | null; retry: () => void; canRetry: boolean }) {
+  const reviews = snapshot?.proposals ?? [];
+  if (loading && !snapshot) return <div className='dv2-loading' aria-label='Loading live reviews'><i /><i /><i /></div>;
+  if (dataError && !snapshot) return <div className='dv2-empty'><CircleAlert size={18} /><p>Live contract reads are unavailable.</p><EditorialAction onClick={retry} disabled={!canRetry}>{canRetry ? 'Retry' : 'Retry unavailable'}</EditorialAction></div>;
+  if (reviews.length === 0) return <div className='dv2-zero'><span>000</span><h3>No reviews indexed yet.</h3><p>The public registry is empty. Start the first funded review when you are ready.</p><EditorialButton href='/reviews/new'>Start a Review</EditorialButton></div>;
+  return <div className='dv2-case-list'>{reviews.slice(0, 4).map((proposal, index) => <Link href={'/reviews/' + encodeURIComponent(proposal.id)} className='dv2-case-row' key={proposal.id}><span className='dv2-case-index'>{String(index + 1).padStart(3, '0')}</span><span className='dv2-case-main'><strong>{proposal.action}</strong><small>{proposal.id}</small></span><span className={'dv2-status dv2-status-' + proposal.status.toLowerCase()}>{proposal.status}</span><span className='dv2-case-money'>{formatWei(proposal.initialBounty)}</span><ArrowUpRight size={16} /></Link>)}</div>;
+}
+
+function LiveProof({ snapshot }: { snapshot: ReturnType<typeof useDissent>['snapshot'] }) {
+  if (!snapshot) return null;
+  return <div className='dv2-proof-strip'><div><EditorialLabel>Indexed reviews</EditorialLabel><strong>{snapshot.proposalCount.toString()}</strong></div><div><EditorialLabel>Outstanding escrow</EditorialLabel><strong>{formatWei(snapshot.accounting.totalOutstandingEscrow)}</strong></div><div><EditorialLabel>Settled credits</EditorialLabel><strong>{formatWei(snapshot.accounting.totalSettledCredits)}</strong></div><div><EditorialLabel>Contract</EditorialLabel><strong className='dv2-mono'>{configState.ok ? shortAddress(configState.value.contractAddress) : 'Unavailable'}</strong></div></div>;
+}
+
+export function LandingV2Polished() {
+  const { snapshot, loading, dataError, retry, canRetry } = useDissent();
+  const firstReview = snapshot?.proposals[0];
+  return <div className='dv2-landing'>
+    <section className='dv2-hero' aria-labelledby='dv2-landing-title'><div className='dv2-hero-grid'><div className='dv2-hero-meta'><EditorialLabel>Paid adversarial review for AI agents</EditorialLabel><span>Studio Next / chain 61997</span><span>Commit / Challenge / Verdict</span></div><div className='dv2-hero-word' aria-hidden='true'>DISSENT</div><MotionReveal className='dv2-hero-copy'><h1 id='dv2-landing-title'>Stop.<br /><em>You missed something.</em></h1><p>Before an agent acts, fund a challenge round. Independent challengers stake evidence-backed objections. Material flaws earn rewards; unsupported claims lose stake.</p><div className='dv2-hero-actions'><EditorialButton href='/reviews/new'>Start a Review</EditorialButton><EditorialButton href='/reviews' variant='light'>Explore Reviews</EditorialButton></div><div className='dv2-hero-source dv2-hero-source-inline'><PitchSourceV2 /></div></MotionReveal><div className='dv2-hero-visual' aria-hidden='true'><div className='dv2-hero-paper'><span>CASE FILE</span><strong>NO<br />BLIND<br />SPOTS</strong><i /><small>VERIFICATION / 61997</small></div><div className='dv2-hero-redline' /></div><div className='dv2-hero-source dv2-hero-scroll-source'><a href='#how-it-works' className='dv2-scroll-cue'>Scroll to inspect <ArrowDownRight size={15} /></a></div></div></section>
+    <section className='dv2-try-strip' aria-labelledby='dv2-try-title'><GridFrame><div><EditorialLabel>Try Dissent</EditorialLabel><h2 id='dv2-try-title'>Read the record. Then decide.</h2><p>A second opinion with skin in the game. Dissent is an opt-in contract gate: the proposal, evidence, objections and outcome remain on record.</p></div><ol><li><span>01</span><strong>Read</strong><p>Open the public registry with no wallet.</p></li><li><span>02</span><strong>Review</strong><p>Inspect evidence, objections and state.</p></li><li><span>03</span><strong>Act</strong><p>Connect only when a funded write is needed.</p></li></ol><div className='dv2-try-actions'><EditorialButton href={firstReview ? '/reviews/' + encodeURIComponent(firstReview.id) : '/reviews'} variant='light'>Explore live review</EditorialButton><EditorialButton href='/reviews/new'>Start a Review</EditorialButton></div></GridFrame></section>
+    <section className='dv2-section dv2-section-light dv2-explanation-section' id='how-it-works' aria-labelledby='dv2-how-title'><GridFrame><div className='dv2-sticky-intro'><SectionMarker number='01' label='What Dissent reviews' /><h2 id='dv2-how-title'>A funded pause before an autonomous action.</h2><p>An opt-in gate where the proposal, evidence, objections and outcome are recorded by the contract.</p><EditorialButton href='/reviews/new'>Start a Review</EditorialButton></div><div className='dv2-explanation-grid'>{[['Action', 'What is the agent proposing?', 'The proposer names the action and intended outcome.'], ['Objection', 'What could make it unsafe?', 'A challenger stakes a specific material concern.'], ['Evidence', 'What can validators inspect?', 'The review points to a public source and preserves observations.'], ['Outcome', 'What did the contract record?', 'Adjudication records CLEAR, REVISE or BLOCK; execution is separate.']].map(([title, question, body], index) => <article className='dv2-explanation-cell' key={title}><span>{String(index + 1).padStart(2, '0')}</span><EditorialLabel>{title}</EditorialLabel><h3>{question}</h3><p>{body}</p></article>)}</div></GridFrame></section>
+    <section className='dv2-section dv2-section-black' aria-labelledby='dv2-process-title'><GridFrame><div className='dv2-section-head'><SectionMarker number='02' label='The mechanism' /><div><EditorialLabel>Five recorded stages</EditorialLabel><h2 id='dv2-process-title'>The record moves<br /><em>one state at a time.</em></h2></div></div><ol className='dv2-process-line'>{stages.map(([number, title, body]) => <li key={number}><span>{number}</span><div><h3>{title}</h3><p>{body}</p></div></li>)}</ol></GridFrame></section>
+    <section className='dv2-section dv2-section-light dv2-live-section' aria-labelledby='dv2-live-title'><GridFrame><div className='dv2-section-head dv2-section-head-split dv2-live-head'><div><SectionMarker number='03' label='Live registry' /><EditorialLabel>Real contract proof</EditorialLabel><h2 id='dv2-live-title'>Reviews in the record.</h2></div><p>Public reads are wallet-free. Every row below is loaded from the deployed Dissent contract.</p></div><LiveReviews snapshot={snapshot} loading={loading} dataError={dataError} retry={retry} canRetry={canRetry} /><LiveProof snapshot={snapshot} /></GridFrame></section>
+    <section className='dv2-section dv2-section-red dv2-evidence-section' aria-labelledby='dv2-evidence-title'><GridFrame><div className='dv2-section-head dv2-section-head-split'><div><SectionMarker number='04' label='Evidence' /><EditorialLabel>What can be inspected</EditorialLabel><h2 id='dv2-evidence-title'>Specific claims.<br /><em>Specific sources.</em></h2></div><p>Dissent evaluates what a proposer places in the record. It does not execute arbitrary textual actions or stop activity performed outside the gate.</p></div><div className='dv2-evidence-grid'>{evidence.map(([category, description], index) => <div key={category}><span>{String(index + 1).padStart(2, '0')}</span><div><strong>{category}</strong><p>{description}</p></div></div>)}</div></GridFrame></section>
+    <section className='dv2-section dv2-section-light dv2-faq' aria-labelledby='dv2-faq-title'><GridFrame><div className='dv2-section-head'><SectionMarker number='05' label='Protocol facts' /><EditorialLabel>Questions before action</EditorialLabel><h2 id='dv2-faq-title'>No mystery state.</h2></div><div className='dv2-faq-list'>{[['Do I need a wallet to read?', 'No. Public reads and the review registry are available without connecting a wallet.'], ['What is settled credit?', 'Credits settled by Dissent remain inside Dissent and can fund supported proposals or challenges. They are not wallet GEN and are not withdrawable in this release.'], ['What does CLEAR mean?', 'CLEAR means the contract has recorded a favorable verdict. The proposer still has to execute the clear gate before the outstanding bond becomes settled credit.'], ['What happens when review providers fail?', 'An unresolved OPEN proposal can be permissionlessly cancelled only after the documented recovery delay, returning escrow to settled credits.'], ['Can Dissent stop an action outside the contract?', 'No. Dissent is an opt-in escrow and review gate. It only enforces the actions and states implemented by the deployed contract.']].map(([question, answer]) => <details key={question}><summary>{question}<span>+</span></summary><p>{answer}</p></details>)}</div></GridFrame></section>
+    <section className='dv2-closing'><GridFrame><EditorialLabel>Make room for the objection.</EditorialLabel><h2>Start the review<br /><em>before the action.</em></h2><EditorialButton href='/reviews/new'>Start a Review</EditorialButton></GridFrame></section>
+  </div>;
+}

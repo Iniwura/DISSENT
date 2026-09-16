@@ -1,11 +1,11 @@
 {
-  "name": "GenLayer Football Market",
-  "short_name": "GenLayer Market",
-  "description": "AI-powered football match predictions on GenLayer blockchain",
+  "name": "Dissent",
+  "short_name": "Dissent",
+  "description": "A live adversarial review market for autonomous agent decisions",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
-  "theme_color": "#9B6AF6",
+  "theme_color": "#ff4d3d",
   "icons": [
     {
       "src": "/favicon.svg",

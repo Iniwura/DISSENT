@@ -1,5 +1,5 @@
 {
-  "name": "dissent-studio-dev-browser-e2e",
+  "name": "dissent-studio-next-browser-e2e",
   "private": true,
   "type": "module",
   "scripts": {

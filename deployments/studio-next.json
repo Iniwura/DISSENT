@@ -1,0 +1,40 @@
+{
+  "network": "studio-next",
+  "displayName": "Studio Next",
+  "chainId": 61997,
+  "rpcUrl": "https://studio-next.genlayer.com/api",
+  "explorerUrl": "https://explorer-studio-dev.genlayer.com/",
+  "status": "finalized",
+  "contractAddress": "0x8BD79Ac285FBd87147B9A64BfF60436C050A684C",
+  "deploymentTransaction": "0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523",
+  "sender": "0xA35dc047f9937BF668743efBDF8Ea93B31A55888",
+  "constructor": {
+    "minimumBounty": "300",
+    "minimumStake": "100",
+    "minimumExecutionBond": "1000"
+  },
+  "sourceHash": "94a58b608592076c1e1960f47ea557360d0185b7fe3a0cb566dc88422cc70ec7",
+  "feeQuote": {
+    "feeValue": "50000000000006470",
+    "distribution": {
+      "leaderTimeunitsAllocation": "125",
+      "validatorTimeunitsAllocation": "250",
+      "executionBudgetPerRound": "25000000000000000",
+      "executionConsumed": "0",
+      "totalMessageFees": "0",
+      "rotations": ["1"],
+      "maxPriceGenPerTimeUnit": "2",
+      "storageFeeMaxGasPrice": "300000000",
+      "receiptFeeMaxGasPrice": "300000000"
+    }
+  },
+  "feeOutcome": {
+    "deposited": "50000000000006470",
+    "consumed": "78941750001029",
+    "refunded": "49921058250005441"
+  },
+  "finalLifecycleStatus": "FINALIZED",
+  "finalExecutionResult": "FINISHED_WITH_RETURN",
+  "timestamp": "2026-09-15T22:31:14.053850+00:00",
+  "explorerTransaction": "https://explorer-studio-dev.genlayer.com/tx/0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523"
+}

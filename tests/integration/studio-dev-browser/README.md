@@ -1,9 +1,13 @@
-# Studio-dev browser-wallet E2E harness
+# Studio Next browser-wallet E2E harness
 
 This harness replaces the Python transaction runner without changing the
-contract or the application frontend. It uses `genlayer-js@2.0.0-rc.1`, the
-SDK's `studioDevnet` chain definition, and the browser wallet exposed as
-`window.ethereum`.
+contract or the application frontend. It uses genlayer-js 2.0.0-rc.1 with an
+explicit Studio Next chain adapter backed by the Studio Next RPC, and
+the browser wallet exposed as window.ethereum.
+
+Studio-dev and Studio Next share chain ID 61997. The wallet endpoint must be
+checked manually if an injected wallet still points at Studio-dev; chain ID
+alone is not proof of the selected RPC.
 
 It is intentionally separate from the normal pytest/gltest suite. The page
 does nothing on load. Existing-contract mode requires the user to paste the
@@ -38,8 +42,9 @@ scenario; **Existing contract** is the default. The harness verifies:
 4. a separate commit and challenge;
 5. challenged adjudication, including the contract's web and LLM branch.
 
-Each write estimates fees through `genlayer-js` and passes both
-`distribution` and `feeValue`. Writes wait for finalization and reads request
+Each write estimates fees through `genlayer-js` against the Studio Next RPC and
+passes both `distribution` and `feeValue`. Writes wait for
+finalization and reads request
 `latest-final` state. The harness verifies the on-chain Dissent credit ledger
 after execution and challenged settlement; it does not submit an external
 payout or infer wallet delivery. The `commit`, `revise`, and `challenge` ABI

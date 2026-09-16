@@ -199,9 +199,93 @@ does not stop actions performed outside the opt-in gate and does not execute
 arbitrary textual actions. Prompt-injection resistance is bounded validation,
 not a proof that malicious prose can never influence an LLM.
 
-## Verified Studio-dev deployment
+## Studio Next frontend target
 
-The verified release-candidate deployment is at
-`0xcf68E576cEdAD0ff5b6DA746Cc099A3B1421F13F` on Studio-dev (chain ID `61997`),
-from source commit `eac9efea391fe712343a92ab1b7004d53ba3bdcd`. Credits are
-reusable inside Dissent but are not wallet-withdrawable in this RC.
+The frontend and fresh deployment target use Studio Next at
+https://studio-next.genlayer.com/api on chain ID 61997. Studio-dev and Studio
+Next share that chain ID, so chain ID alone does not prove the injected wallet
+uses the configured endpoint. If needed, manually update the wallet network RPC
+to https://studio-next.genlayer.com/api before confirming it in the app.
+
+## Current Studio Next deployment
+
+The authoritative Dissent deployment is finalized and accepted on Studio Next:
+
+- RPC: https://studio-next.genlayer.com/api
+- Chain ID: 61997
+- Contract: `0x8BD79Ac285FBd87147B9A64BfF60436C050A684C`
+- Deployment transaction: `0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523`
+- Explorer: [deployment transaction](https://explorer-studio-dev.genlayer.com/tx/0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523)
+- Constructor minimums: bounty `300`, challenge stake `100`, execution bond `1000` wei
+- Lifecycle: `FINALIZED` / `Accepted`, execution result `FINISHED_WITH_RETURN`
+
+Public reads are wallet-free. Writes require a connected wallet configured for
+Studio Next and explicit wallet approval. Settled Dissent credits are reusable
+for supported Dissent funding, but are not wallet-withdrawable in this RC.
+
+## Reviewer verification
+
+From the repository root, the following commands match the checked-in scripts
+and installed CLI syntax:
+
+```shell
+npm install
+npm run lint
+npm run build
+PYTHONPATH=. pytest tests/direct/test_dissent.py -q
+genvm-lint check contracts/dissent.py
+```
+
+Read the deployed contract without changing state:
+
+```shell
+genlayer schema 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_config --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_accounting --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_proposal_count --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_proposal_ids --rpc https://studio-next.genlayer.com/api --args 0 50
+```
+
+The frontend is configured with
+`NEXT_PUBLIC_GENLAYER_RPC_URL`, `NEXT_PUBLIC_GENLAYER_CHAIN_ID`,
+`NEXT_PUBLIC_GENLAYER_NETWORK`, and
+`NEXT_PUBLIC_DISSENT_CONTRACT_ADDRESS`; copy
+`frontend/.env.example` to `frontend/.env.local` when overriding the verified
+defaults. Run the local app with `npm run dev`.
+
+The product flow is commit → challenge → adjudicate → either revise, execute,
+or cancel. Validators evaluate the proposal, policy, cited HTTPS evidence and
+any objections; consensus records the meaningful contract state and its
+settlement. Decentralized judgment is needed because independent validators
+provide the adversarial source review rather than trusting the proposing agent
+alone. Dissent is an opt-in escrow/review gate: it does not stop actions taken
+outside Dissent and does not execute arbitrary textual actions.
+
+## Demo video checklist
+
+- Explain the autonomous-action risk and why a paid adversarial review is needed.
+- Show the finalized Studio Next contract and its explorer transaction.
+- Open the wallet chooser without implying that a wallet is needed for public reads.
+- Create a proposal with evidence and explicit funding.
+- Add a challenge, wait for the review window, and show adjudication/verdict.
+- Open the public dossier with evidence observations and settlement state.
+- Use the explorer to prove the recorded contract transaction and finalized lifecycle.
+
+Mark only actions actually demonstrated in the recording; this checklist does
+not claim that an untested browser flow has been verified.
+
+## Verified historical Studio-dev deployment
+
+The existing verified release-candidate deployment is historical evidence at
+0x84586890322D91B722eed1F5480845dB9272405e on the canonical Studio-dev RPC
+(chain ID 61997), from source commit
+eac9efea391fe712343a92ab1b7004d53ba3bdcd. Deployment transaction:
+0x62da1e3be8f231ed21ce6cd73abffc110db19f6517e46936679cace47142b690.
+The deployment starts with an empty proposal index and zero escrow/settled
+credits. Credits are reusable inside Dissent but are not wallet-withdrawable
+in this RC.
+
+Fee profiles are measured locally with the repository's `gltest` profile
+fixture, and the deployment script converts the measured deploy entry into
+supported live estimate options before asking Studio Next for a fresh quote.
+The returned distribution and `feeValue` are submitted unchanged.

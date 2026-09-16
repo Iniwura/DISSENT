@@ -1,84 +1,73 @@
-# GenLayer Football Market
+# Dissent frontend
 
-Next.js frontend for GenLayer Football Market - AI-powered football match predictions on GenLayer blockchain.
+Dissent is an opt-in adversarial review market for autonomous decisions. This
+frontend presents the Studio Next product on `https://studio-next.genlayer.com/api`.
+The configured contract is the verified fresh deployment
+0x8BD79Ac285FBd87147B9A64BfF60436C050A684C; public reads require that
+address to exist on the selected RPC: proposal index,
+proposal records, challenges, evidence observations, accounting and internal
+settled credits. Explicit wallet-gated forms cover the contract’s commit,
+challenge, adjudicate, revise, execute and cancel writes.
 
-## Setup
+## Run locally
 
-1. Install dependencies:
+Install from the repository root because this project is an npm workspace:
 
-**Using bun:**
-```bash
-bun install
-```
-
-**Using npm:**
 ```bash
 npm install
-```
-
-2. Create `.env` file:
-```bash
-cp .env.example .env
-```
-
-3. Configure environment variables:
-   - `NEXT_PUBLIC_CONTRACT_ADDRESS` - GenLayer Football Betting contract address
-   - `NEXT_PUBLIC_STUDIO_URL` - GenLayer Studio URL (default: https://studio.genlayer.com/api)
-
-## Development
-
-**Using bun:**
-```bash
-bun dev
-```
-
-**Using npm:**
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+The app is available at `http://localhost:3000`. Verification commands are:
 
-## Build
-
-**Using bun:**
 ```bash
-bun run build
-bun start
-```
-
-**Using npm:**
-```bash
+npm run lint
 npm run build
-npm start
 ```
 
-## Tech Stack
+## Public configuration
 
-- **Next.js 15** - React framework with App Router
-- **TypeScript** - Type safety
-- **Tailwind CSS v4** - Styling with custom glass-morphism theme
-- **genlayer-js** - GenLayer blockchain SDK
-- **TanStack Query (React Query)** - Data fetching and caching
-- **Radix UI** - Accessible component primitives
-- **shadcn/ui** - Pre-built UI components
+Copy .env.example to .env.local only when overriding the configured defaults.
 
-## Wallet Management
+- NEXT_PUBLIC_GENLAYER_RPC_URL - Studio Next RPC used for public reads and writes.
+- `NEXT_PUBLIC_GENLAYER_CHAIN_ID` — must be `61997` for this RC.
+- NEXT_PUBLIC_GENLAYER_NETWORK - must be studio-next (the product-facing label).
+- NEXT_PUBLIC_DISSENT_CONTRACT_ADDRESS - the Dissent contract address on the
 
-The app uses GenLayer's account system:
-- **Create Account**: Generate a new private key
-- **Import Account**: Import existing private key
-- **Export Account**: Export your private key (secured)
-- **Disconnect**: Clear stored account data
+Malformed configuration is shown in the UI rather than silently falling back
+to demo data. Reads use `genlayer-js@2.0.0-rc.1`, `explicit Studio Next chain adapter plus the transaction-kit RC`, concurrency
+limits, in-flight deduplication, stale-response guards and finalized read
+snapshots. No wallet is needed to browse the public review market.
 
-Accounts are stored in browser's localStorage for development convenience.
+## Product boundary
 
-## Features
+Connecting a browser wallet is always explicit. Writes are guarded to
+Studio Next chain 61997, require a wallet signature, wait for finalization and
+refresh the finalized public reads before reporting success. Settled credits
+are reusable for future Dissent proposals and challenges, but this RC has no
+wallet withdrawal or cashout path.
 
-- **Create Bets**: Create football match predictions with team names, game date, and predicted winner (Team 1, Team 2, or Draw)
-- **View Bets**: Real-time bet table with match details, predictions, status, and owners
-- **Resolve Bets**: Bet owners can resolve matches using GenLayer's AI to verify actual results
-- **Leaderboard**: Track top players by points earned from correct predictions
-- **Player Stats**: View your points and ranking in the community
-- **Glass-morphism UI**: Premium dark theme with OKLCH colors, backdrop blur effects, and smooth animations
-- **Real-time Updates**: Automatic data fetching with 3-second polling intervals via TanStack Query
+Dissent is an opt-in adversarial review market. It does not stop actions that
+are performed outside the contract and it does not execute arbitrary textual
+actions. External evidence is displayed as evidence, not instructions, and
+may change between adjudication attempts.
+
+## Routes
+
+- `/` — editorial landing page with the live contract proof and review model.
+- `/reviews` — public review market, filters, search and creation-order index.
+- `/reviews#start-a-review` — wallet-gated commit form with external-only,
+  credit-only or mixed funding.
+- `/reviews/[id]` — proposal brief, evidence anchor, challenges, hashes,
+  status, escrow and revision lineage.
+- `/balance` — account-scoped settled Dissent credits.
+- `/proposals/[id]` — compatibility redirect to `/reviews/[id]`.
+- `/credits` — compatibility redirect to `/balance`.
+
+Network, RPC, chain, contract, SDK and connection diagnostics live in the
+header’s Network status drawer. Dissent does not stop actions performed
+outside the contract and does not execute arbitrary textual actions. External
+evidence is displayed as evidence, not instructions, and may change between
+adjudication attempts. Unresolved OPEN proposals have an exceptional
+seven-day liveness recovery mechanism; cancellation is not a normal
+alternative to adjudication.

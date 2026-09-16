@@ -1,0 +1,12 @@
+"use client";
+
+import { CircleAlert, LockKeyhole, Wallet } from "lucide-react";
+import { useDissent } from "@/components/dissent/DissentProvider";
+import { formatWei } from "@/lib/dissent/types";
+import { EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
+
+export function BalanceLedgerV2() {
+  const { snapshot, wallet, loading, dataError } = useDissent();
+  const credit = snapshot?.walletCredit;
+  return <div className="dv2-page dv2-balance-page"><GridFrame><div className="dv2-page-intro"><SectionMarker number="04" label="Internal ledger" /><div><EditorialLabel>Dissent balance</EditorialLabel><h1>Credit, not cash.</h1><p>Settled credits stay inside Dissent and can fund supported proposals and challenges.</p></div></div>{!wallet.connected ? <div className="dv2-disconnected"><Wallet size={20} /><h2>Connect when you want to inspect your balance.</h2><p>Public reads stay wallet-free. A connected wallet is required for the account-specific credit read.</p></div> : loading && !snapshot ? <div className="dv2-loading"><i /><i /><i /></div> : dataError && !snapshot ? <div className="dv2-empty"><CircleAlert size={18} /><p>Account credit is unavailable right now.</p></div> : <><section className="dv2-balance-hero"><div><EditorialLabel>Available settled credit</EditorialLabel><strong>{credit === null || credit === undefined ? " -" : formatWei(credit)}</strong><span>account-specific / {wallet.address}</span></div><div className="dv2-balance-lock"><LockKeyhole size={20} /><span>Reusable inside Dissent.<br />Not wallet balance.<br />Not withdrawable in this RC.</span></div></section><div className="dv2-ledger-layout"><section className="dv2-ledger"><div className="dv2-ledger-head"><EditorialLabel>Usage ledger</EditorialLabel><span>01</span></div><div className="dv2-ledger-row"><span>01</span><strong>Fund a new proposal</strong><small>Credit may contribute to bounty and execution-bond funding.</small></div><div className="dv2-ledger-row"><span>02</span><strong>Fund a challenge</strong><small>Credit may contribute to a challenger stake.</small></div><div className="dv2-ledger-row is-muted"><span>03</span><strong>Wallet cashout</strong><small>No withdrawal or wallet payout path exists in this release.</small></div></section><aside className="dv2-credit-note"><EditorialLabel>Accounting note</EditorialLabel><p>Total external deposits remain conserved as outstanding escrow plus settled Dissent credits. Reusing credit moves value between those internal buckets; it does not create new GEN.</p></aside></div></>}</GridFrame></div>;
+}

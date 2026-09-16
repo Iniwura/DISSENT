@@ -3,11 +3,26 @@ import { studioDevnet } from "genlayer-js/chains";
 import { ExecutionResult, TransactionHashVariant } from "genlayer-js/types";
 
 const CONTRACT_URL = "/contracts/dissent.py";
-const STORAGE_KEY = "dissent-studio-dev-e2e:v2";
-const DEFAULT_CONTRACT_ADDRESS = "0xcf68E576cEdAD0ff5b6DA746Cc099A3B1421F13F";
+const STUDIO_NEXT_RPC_URL = "https://studio-next.genlayer.com/api";
+const STUDIO_NEXT_CHAIN_ID = 61997;
+const STUDIO_NEXT_CHAIN_ID_HEX = "0xf22d";
+// genlayer-js version 2.0.0-rc.1 has no studioNext export. Reuse the official
+// Studio chain metadata and replace the endpoint and labels explicitly.
+const studioNext = {
+  ...studioDevnet,
+  id: STUDIO_NEXT_CHAIN_ID,
+  name: "GenLayer Studio Next",
+  rpcUrls: {
+    ...studioDevnet.rpcUrls,
+    default: { http: [STUDIO_NEXT_RPC_URL] },
+    public: { http: [STUDIO_NEXT_RPC_URL] },
+  },
+};
+const STORAGE_KEY = "dissent-studio-next-e2e:v4";
+const DEFAULT_CONTRACT_ADDRESS = "0x8BD79Ac285FBd87147B9A64BfF60436C050A684C";
 const MOCK_PROVIDER_MODE = new URLSearchParams(window.location.search).get("mock-provider") === "1";
 const MOCK_ACCOUNT = "0x0000000000000000000000000000000000000001";
-const CHAIN_ID_HEX = `0x${studioDevnet.id.toString(16)}`;
+const CHAIN_ID_HEX = STUDIO_NEXT_CHAIN_ID_HEX;
 const MINIMUM_BOUNTY = 300;
 const MINIMUM_STAKE = 100;
 const MINIMUM_EXECUTION_BOND = 1_000;
@@ -136,7 +151,7 @@ function createMockReadClient() {
 
 state.readClient = MOCK_PROVIDER_MODE
   ? createMockReadClient()
-  : createClient({ chain: studioDevnet });
+  : createClient({ chain: studioNext });
 
 function saveState() {
   const persisted = { ...state };
@@ -172,8 +187,8 @@ function errorText(error) {
 function statusSnapshot(message = null) {
   return {
     message,
-    network: studioDevnet.name,
-    chainId: studioDevnet.id,
+    network: studioNext.name,
+    chainId: studioNext.id,
     mode: state.mode,
     contractAddress: state.contractAddress,
     proposer: state.proposer,
@@ -231,16 +246,17 @@ function resetProgress(message) {
   render(message);
 }
 
-async function ensureStudioDevnet() {
+async function ensureStudioNext() {
   const wallet = provider();
   const currentChain = await wallet.request({ method: "eth_chainId" });
   if (currentChain.toLowerCase() === CHAIN_ID_HEX.toLowerCase()) return;
 
   const chainParams = {
     chainId: CHAIN_ID_HEX,
-    chainName: studioDevnet.name,
-    rpcUrls: [...studioDevnet.rpcUrls.default.http],
-    nativeCurrency: studioDevnet.nativeCurrency,
+    chainName: "GenLayer Studio Next",
+    rpcUrls: [STUDIO_NEXT_RPC_URL],
+    nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
+    blockExplorerUrls: ["https://explorer-studio-dev.genlayer.com"],
   };
   try {
     await wallet.request({
@@ -266,11 +282,11 @@ async function connectedAccounts() {
 
 async function assertFunded(address) {
   const balance = await state.readClient.getBalance({ address });
-  if (balance <= 0n) throw new Error(`Account ${address} has no Studio-dev balance.`);
+  if (balance <= 0n) throw new Error(`Account ${address} has no Studio Next balance.`);
 }
 
 async function connectProposer() {
-  await ensureStudioDevnet();
+  await ensureStudioNext();
   const accounts = await connectedAccounts();
   const proposer = accounts[0];
   if (!proposer) throw new Error("The wallet returned no account.");
@@ -289,7 +305,7 @@ async function connectProposer() {
 
 async function connectChallenger() {
   if (!state.proposerConnected) throw new Error("Connect the proposer first.");
-  await ensureStudioDevnet();
+  await ensureStudioNext();
   const accounts = await connectedAccounts();
   const challenger = accounts.find(
     (account) => account.toLowerCase() !== state.proposer.toLowerCase(),
@@ -323,7 +339,7 @@ function writeClient(account) {
     };
   }
   return createClient({
-    chain: studioDevnet,
+    chain: studioNext,
     account,
     provider: provider(),
   });
@@ -337,7 +353,7 @@ async function estimateFees() {
     rotations: [1n],
   });
   const feeValue = estimate.feeValue === undefined ? 0n : BigInt(estimate.feeValue);
-  if (feeValue <= 0n) throw new Error("Studio-dev returned no positive feeValue estimate.");
+  if (feeValue <= 0n) throw new Error("Studio Next returned no positive feeValue estimate.");
   return { distribution: estimate.distribution, feeValue };
 }
 
@@ -496,7 +512,7 @@ async function runNoChallenge() {
   render("No-challenge preparing...");
   try {
     if (!state.proposerConnected) throw new Error("Connect the proposer first.");
-    await ensureStudioDevnet();
+    await ensureStudioNext();
     await ensureContract();
     await verifyConfig();
     ensureScenarioIds(scenario, `${Date.now()}-clear`);
@@ -565,7 +581,7 @@ async function runChallenged() {
   if (!state.challengerConnected || state.proposer.toLowerCase() === state.challenger.toLowerCase()) {
     throw new Error("Connect a distinct funded challenger first.");
   }
-  await ensureStudioDevnet();
+  await ensureStudioNext();
   await ensureContract();
   await verifyConfig();
   const scenario = state.challenged;

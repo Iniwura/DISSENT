@@ -26,4 +26,3 @@ __pycache__/
 /frontend/package-lock.json
 *.compiled.js
 *.tsbuildinfo
-package-lock.json

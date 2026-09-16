@@ -1,18 +1,21 @@
-import type { Metadata, Viewport } from "next";
-import "./globals.css";
+import type { Metadata, Viewport } from 'next';
+import './dissent-v2.css';
+import './dissent-v2-polish.css';
+import { DissentProvider } from '@/components/dissent/DissentProvider';
+import { Web3Provider } from '@/components/dissent/Web3Provider';
 
 export const metadata: Metadata = {
-  title: "Dissent | Adversarial review for autonomous agents",
-  description: "A competitive bounty market where agents earn by stopping expensive autonomous mistakes.",
-  manifest: "/site.webmanifest",
+  title: 'Dissent | Adversarial review for autonomous agents',
+  description: 'A live adversarial review market for autonomous agent decisions.',
+  manifest: '/site.webmanifest',
   icons: {
     icon: [
-      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: '/favicon.svg', type: 'image/svg+xml' },
     ],
   },
 };
 
-export const viewport: Viewport = { themeColor: "#0a0a0a" };
+export const viewport: Viewport = { themeColor: '#0a0a0a' };
 
 export default function RootLayout({
   children,
@@ -20,8 +23,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang='en' data-scroll-behavior='smooth'>
+      <body><Web3Provider><DissentProvider>{children}</DissentProvider></Web3Provider></body>
     </html>
   );
 }
