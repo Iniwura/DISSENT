@@ -2,7 +2,7 @@ import { createTransactionKit } from "@genlayer/transaction-kit";
 import { createClient } from "genlayer-js";
 import { transactionsStatusNumberToName, executionResultNumberToName, type CalldataEncodable, type GenLayerTransaction, type TransactionHash } from "genlayer-js/types";
 import { configState, requireConfig } from "./config";
-import { readContract } from "./data";
+import { invalidateReadCache, readContract } from "./data";
 import { studioNext } from "./network";
 import { readWalletChainId } from "./wallet";
 import type { InjectedProvider } from "./wallet";
@@ -80,9 +80,27 @@ export function getPendingWrite(): PendingWrite | null {
   } catch { return null; }
 }
 
-function clearPendingWrite(): void {
+function samePendingWrite(left: PendingWrite, right: PendingWrite): boolean {
+  return left.hash.toLowerCase() === right.hash.toLowerCase()
+    && left.functionName === right.functionName
+    && left.proposalId === right.proposalId
+    && left.secondaryId === right.secondaryId;
+}
+
+function clearPendingWrite(expected: PendingWrite): void {
   if (typeof window === "undefined") return;
-  try { window.localStorage.removeItem(PENDING_WRITE_STORAGE_KEY); } catch { /* Storage is optional. */ }
+  try {
+    const current = getPendingWrite();
+    if (current && samePendingWrite(current, expected)) window.localStorage.removeItem(PENDING_WRITE_STORAGE_KEY);
+  } catch { /* Storage is optional. */ }
+}
+
+function transactionRecipient(receipt: GenLayerTransaction): string | null {
+  const record = receipt as unknown as Record<string, unknown>;
+  for (const key of ["recipient", "to_address", "toAddress", "to"]) {
+    if (typeof record[key] === "string") return record[key] as string;
+  }
+  return null;
 }
 
 function statusName(receipt: GenLayerTransaction): string | undefined {
@@ -137,20 +155,30 @@ export async function reconcilePendingWrite(pending: PendingWrite): Promise<Pend
   try {
     const config = requireConfig();
     const receipt = await createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash });
+    const recipient = transactionRecipient(receipt);
+    if (!recipient || recipient.toLowerCase() !== config.contractAddress.toLowerCase()) return null;
     const currentStatus = statusName(receipt);
     const result = executionResultName(receipt);
     if ((currentStatus === "ACCEPTED" || currentStatus === "FINALIZED") && result === "FINISHED_WITH_RETURN") {
-      if (await confirmContractState(pending.functionName, pending.proposalId, pending.secondaryId)) {
-        clearPendingWrite();
-        return { status: "confirmed", hash: pending.hash };
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          invalidateReadCache();
+          if (await confirmContractState(pending.functionName, pending.proposalId, pending.secondaryId)) {
+            clearPendingWrite(pending);
+            return { status: "confirmed", hash: pending.hash };
+          }
+        } catch {
+          // A transient read failure is not proof that the submitted write failed.
+        }
+        if (attempt === 0) await new Promise<void>((resolve) => setTimeout(resolve, 250));
       }
       return null;
     }
     if (currentStatus === "FINALIZED" && result && result !== "FINISHED_WITH_RETURN") {
-      clearPendingWrite();
+      clearPendingWrite(pending);
       return { status: "failed", hash: pending.hash, error: FAILED_AFTER_BROADCAST };
     }
-  } catch { /* Keep the pending record for a later reconciliation. */ }
+  } catch { /* Keep pending record for a later reconciliation. */ }
   return null;
 }
 
@@ -280,17 +308,30 @@ export async function submitContractWrite(
       throw new Error("The submitted transaction has not reached an accepted or finalized state.");
     }
     if (executionResultName(receipt) !== "FINISHED_WITH_RETURN") {
-      clearPendingWrite();
+      clearPendingWrite({
+        hash,
+        functionName: request.functionName,
+        proposalId: proposalIdFor(request.functionName, request.args) ?? "",
+        secondaryId: secondaryIdFor(request.functionName, request.args),
+        createdAt: 0,
+      });
       onProgress({ phase: "failed", hash, error: FAILED_AFTER_BROADCAST });
       throw new Error(FAILED_AFTER_BROADCAST);
     }
 
+    invalidateReadCache();
     if (!await confirmContractState(request.functionName, proposalIdFor(request.functionName, request.args) ?? "", secondaryIdFor(request.functionName, request.args))) {
       onProgress({ phase: "confirmation_pending", hash, error: PENDING_CONFIRMATION });
       return { hash, receipt, confirmed: false };
     }
 
-    clearPendingWrite();
+    clearPendingWrite({
+      hash,
+      functionName: request.functionName,
+      proposalId: proposalIdFor(request.functionName, request.args) ?? "",
+      secondaryId: secondaryIdFor(request.functionName, request.args),
+      createdAt: 0,
+    });
     onProgress({ phase: "confirmed", hash, error: null });
     return { hash, receipt, confirmed: true };
   } catch (error) {
