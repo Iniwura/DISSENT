@@ -126,7 +126,7 @@ function rawProposalStatus(raw: unknown): string | null {
 
 async function proposalIsIndexed(proposalId: string): Promise<boolean> {
   const rawCount = await readContract("get_proposal_count");
-  const count = typeof rawCount === "bigint" ? rawCount : typeof rawCount === "string" && /^\d+$/.test(rawCount) ? BigInt(rawCount) : null;
+  const count = typeof rawCount === "bigint" ? rawCount : typeof rawCount === "number" && Number.isSafeInteger(rawCount) && rawCount >= 0 ? BigInt(rawCount) : typeof rawCount === "string" && /^\d+$/.test(rawCount) ? BigInt(rawCount) : null;
   if (count === null || count === 0n) return false;
   const offset = count > 50n ? count - 50n : 0n;
   return rawList(await readContract("get_proposal_ids", [offset, 50])).includes(proposalId);
