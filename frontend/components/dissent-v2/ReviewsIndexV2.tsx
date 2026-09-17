@@ -7,7 +7,7 @@ import { useDissent } from "@/components/dissent/DissentProvider";
 import { formatTimestamp, formatWei } from "@/lib/dissent/types";
 import { EditorialAction, EditorialButton, EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
 
-const filters = ["Open bounties", "Closing soon", "Challenged", "Awaiting verdict", "Resolved", "My activity"] as const;
+const filters = ["All reviews", "Open bounties", "Closing soon", "Challenged", "Awaiting verdict", "Resolved", "My activity"] as const;
 type ReviewFilter = (typeof filters)[number];
 const CLOSING_SOON_SECONDS = 24 * 60 * 60;
 
@@ -29,7 +29,7 @@ function formatCountdown(deadline: bigint, now: number) {
 
 export function ReviewsIndexV2() {
   const { snapshot, loading, dataError, retry, canRetry, wallet, walletChallenges } = useDissent();
-  const [filter, setFilter] = useState<ReviewFilter>("Open bounties");
+  const [filter, setFilter] = useState<ReviewFilter>("All reviews");
   const [query, setQuery] = useState("");
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -49,7 +49,9 @@ export function ReviewsIndexV2() {
     return (snapshot?.proposals ?? []).filter((proposal) => {
       const remaining = remainingSeconds(proposal.challengeDeadline, now);
       const matchesFilter =
-        filter === "Open bounties"
+        filter === "All reviews"
+          ? true
+          : filter === "Open bounties"
           ? proposal.status === "OPEN" && remaining > 0n
           : filter === "Closing soon"
             ? proposal.status === "OPEN" && remaining > 0n && remaining <= BigInt(CLOSING_SOON_SECONDS)
