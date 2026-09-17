@@ -71,6 +71,17 @@ function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+let nextRateLimitRetryAt = 0;
+const RATE_LIMIT_RETRY_SPACING_MS = 250;
+
+async function waitForRateLimitRetry(error: unknown, retryNumber: number): Promise<void> {
+  const delay = Math.min(4_000, retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS * (2 ** retryNumber));
+  const now = Date.now();
+  const retryAt = Math.max(now + delay, nextRateLimitRetryAt);
+  nextRateLimitRetryAt = retryAt + RATE_LIMIT_RETRY_SPACING_MS;
+  await wait(Math.max(0, retryAt - now));
+}
+
 async function readContractOnce(functionName: string, args: (string | number | bigint)[]): Promise<unknown> {
   let retries = 0;
   while (true) {
@@ -84,9 +95,8 @@ async function readContractOnce(functionName: string, args: (string | number | b
       });
     } catch (error) {
       if (retries >= MAX_RATE_LIMIT_RETRIES || !isRateLimitError(error)) throw error;
-      const delay = Math.min(4_000, retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS * (2 ** (retries + 1)));
       retries += 1;
-      await wait(delay);
+      await waitForRateLimitRetry(error, retries);
     }
   }
 }
@@ -234,13 +244,13 @@ export async function loadMarketSnapshot(walletAddress: string | null): Promise<
   return { config, accounting, proposalCount, proposalIds, proposals, walletCredit };
 }
 
-export async function loadProposalDetail(proposalId: string): Promise<ProposalDetail> {
+export async function loadProposalDetail(proposalId: string, proposalHint?: Proposal): Promise<ProposalDetail> {
   const canonicalProposalId = validateIdentifier(proposalId, "proposal ID");
   const [rawProposal, rawChallengeIds] = await Promise.all([
-    readContract("get_proposal", [canonicalProposalId]),
+    proposalHint?.id === canonicalProposalId ? Promise.resolve(proposalHint) : readContract("get_proposal", [canonicalProposalId]),
     readContract("get_proposal_challenge_ids", [canonicalProposalId]),
   ]);
-  const proposal = readProposal(rawProposal);
+  const proposal = proposalHint && proposalHint.id === canonicalProposalId ? proposalHint : readProposal(rawProposal);
   const challengeIds = readIdList(rawChallengeIds);
   const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (id) => readChallenge(await readContract("get_challenge", [id])));
   const canExecute = proposal.status === "CLEAR" && await readContract("can_execute", [canonicalProposalId]) === true;

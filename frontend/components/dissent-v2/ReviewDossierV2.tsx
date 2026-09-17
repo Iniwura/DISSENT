@@ -37,7 +37,7 @@ export function ReviewDossierV2({ proposalId }: { proposalId: string }) {
       return () => { active = false; };
     }
     if (!detailLoadedRef.current) setLoading(true);
-    loadProposalDetail(proposalId).then((value) => {
+    loadProposalDetail(proposalId, snapshot?.proposals.find((item) => item.id === proposalId)).then((value) => {
       if (active) {
         detailLoadedRef.current = true;
         setDetail(value);
