@@ -114,8 +114,17 @@ async function proposalIsIndexed(proposalId: string): Promise<boolean> {
   return rawList(await readContract("get_proposal_ids", [offset, 50])).includes(proposalId);
 }
 
+async function proposalIsReadable(proposalId: string): Promise<boolean> {
+  if (!await proposalIsIndexed(proposalId)) return false;
+  try {
+    return rawProposalStatus(await readContract("get_proposal", [proposalId])) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export async function confirmContractState(functionName: string, proposalId: string, secondaryId: string | null = null): Promise<boolean> {
-  if (functionName === "commit" || functionName === "revise") return proposalIsIndexed(proposalId);
+  if (functionName === "commit" || functionName === "revise") return proposalIsReadable(proposalId);
   if (functionName === "challenge") return Boolean(secondaryId && rawList(await readContract("get_proposal_challenge_ids", [proposalId])).includes(secondaryId));
   const state = rawProposalStatus(await readContract("get_proposal", [proposalId]));
   if (functionName === "adjudicate") return state !== null && state !== "OPEN";

@@ -24,11 +24,19 @@ function writeAvailability(wallet: ReturnType<typeof useDissent>["wallet"]): str
   return null;
 }
 
-function useV2Write() {
+type ConfirmedWriteHandler = (proposalId: string, hash: string) => void;
+
+function useV2Write(onConfirmed?: ConfirmedWriteHandler) {
   const { wallet, refresh } = useDissent();
   const [progress, setProgress] = useState<WriteProgress>({ phase: "idle", hash: null, error: null });
   const mounted = useRef(true);
+  const onConfirmedRef = useRef(onConfirmed);
   useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => { onConfirmedRef.current = onConfirmed; }, [onConfirmed]);
+  const notifyConfirmed = useCallback((functionName: string, proposalId: string, hash: string) => {
+    if (!mounted.current || !onConfirmedRef.current || (functionName !== "commit" && functionName !== "revise")) return;
+    onConfirmedRef.current(proposalId, hash);
+  }, []);
   useEffect(() => {
     const pending = getPendingWrite();
     if (!pending) return;
@@ -39,6 +47,7 @@ function useV2Write() {
       if (result?.status === "confirmed") {
         setProgress({ phase: "confirmed", hash: result.hash, error: null });
         refresh();
+        notifyConfirmed(pending.functionName, pending.proposalId, result.hash);
       } else if (result?.status === "failed") {
         setProgress({ phase: "failed", hash: result.hash, error: result.error });
       }
@@ -53,14 +62,18 @@ function useV2Write() {
     if (unavailable || !wallet.provider || !wallet.address) { setProgress({ phase: "failed", hash: null, error: unavailable ?? "Wallet unavailable." }); return null; }
     try {
       const result = await submitContractWrite({ ...request, walletAddress: wallet.address, provider: wallet.provider }, setProgress);
-      if (result.confirmed) refresh();
+      if (result.confirmed) {
+        refresh();
+        const proposalId = request.functionName === "revise" ? request.args[1] : request.args[0];
+        if (typeof proposalId === "string") notifyConfirmed(request.functionName, proposalId, result.hash);
+      }
       return result;
     } catch (error) {
       if (isUserRejectedError(error)) { setProgress((current) => ({ phase: "failed", hash: current.hash, error: sanitizeError(error, "wallet") })); return null; }
       setProgress((current) => ({ phase: "failed", hash: current.hash, error: sanitizeError(error, "write") }));
       return null;
     }
-  }, [active, progress.phase, refresh, wallet]);
+  }, [active, notifyConfirmed, progress.phase, refresh, wallet]);
   return { progress, submit, active, transactionLocked };
 }
 

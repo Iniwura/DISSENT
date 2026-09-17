@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDissent } from '@/components/dissent/DissentProvider';
 import { DissentValidationError, sanitizeError } from '@/lib/dissent/errors';
@@ -17,8 +17,11 @@ function createReviewId() {
 
 export function QuickTestReviewV2({ onBack }: { onBack: () => void }) {
   const { snapshot, wallet } = useDissent();
-  const { progress, submit, active, transactionLocked } = useV2Write();
   const router = useRouter();
+  const navigateAfterConfirmation = useCallback((reviewId: string) => {
+    router.push("/reviews/" + encodeURIComponent(reviewId));
+  }, [router]);
+  const { progress, submit, active, transactionLocked } = useV2Write(navigateAfterConfirmation);
   const [scenarioSlug, setScenarioSlug] = useState(QUICK_TEST_SCENARIOS[0].slug);
   const [values, setValues] = useState<QuickValues>({ id: '', recipient: '', review: '600', durationMode: 'preset', customDuration: '', durationUnit: 'minutes', bounty: '1', external: '1.000000000000001', credit: '0', confirm: false, error: '' });
   const scenario = QUICK_TEST_SCENARIOS.find(item => item.slug === scenarioSlug) ?? QUICK_TEST_SCENARIOS[0];
@@ -52,8 +55,7 @@ export function QuickTestReviewV2({ onBack }: { onBack: () => void }) {
       if (snapshot.walletCredit !== null && snapshot.walletCredit !== undefined && credit > snapshot.walletCredit) throw new DissentValidationError('Settled credit exceeds the connected account balance.');
       if (!funding?.meetsMinimum) throw new DissentValidationError('External GEN and settled credit must cover the bounty and execution bond.');
       if (!values.confirm) throw new DissentValidationError('Confirm the review and funding before publishing.');
-      const result = await submit({ functionName: 'commit', args: [id, scenario.action, scenario.objective, scenario.policy, evidenceUrl, recipient, bounty, duration, credit], value: external });
-      if (result?.confirmed) router.push('/reviews/' + encodeURIComponent(id) + '?tx=' + encodeURIComponent(result.hash));
+      await submit({ functionName: 'commit', args: [id, scenario.action, scenario.objective, scenario.policy, evidenceUrl, recipient, bounty, duration, credit], value: external });
     } catch (error) {
       update({ error: sanitizeError(error, 'validation') });
     }

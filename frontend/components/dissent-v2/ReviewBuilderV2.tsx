@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowLeft, ArrowRight, ArrowUpRight, Check, CircleAlert, LockKeyhole, ShieldCheck, WalletCards } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useDissent, type DissentContextValue } from '@/components/dissent/DissentProvider';
@@ -205,8 +205,11 @@ function stageReady(step: ComposerStep, values: FormValues, dissent: DissentCont
 export function ReviewBuilderV2({ mode, parent, initialKind, onBackToEntry }: { mode: SubmissionMode; parent?: Proposal; initialKind?: DraftKind; onBackToEntry?: () => void }) {
   const dissent = useDissent();
   const { snapshot, wallet } = dissent;
-  const { progress, submit, active, transactionLocked } = useV2Write();
   const router = useRouter();
+  const navigateAfterConfirmation = useCallback((reviewId: string) => {
+    router.push("/reviews/" + encodeURIComponent(reviewId));
+  }, [router]);
+  const { progress, submit, active, transactionLocked } = useV2Write(navigateAfterConfirmation);
   const seededId = useRef(mode === 'revise');
   const [step, setStep] = useState<ComposerStep>(1);
   const [selected, setSelected] = useState<DraftKind | null>(mode === 'revise' ? 'custom' : initialKind ?? null);
@@ -262,8 +265,7 @@ export function ReviewBuilderV2({ mode, parent, initialKind, onBackToEntry }: { 
       if (snapshot?.walletCredit !== null && snapshot?.walletCredit !== undefined && credit > snapshot.walletCredit) throw new DissentValidationError('Settled credit exceeds the connected account balance.');
       if (external > U256_MAX - credit || external + credit < bounty + (minimumBond ?? 0n)) throw new DissentValidationError('External GEN and settled credit must cover the bounty and execution bond.');
       if (!values.confirm) throw new DissentValidationError('Confirm the review and funding before publishing.');
-      const result = await submit({ functionName: mode, args: mode === 'commit' ? [id, action, objective, policy, evidence, recipient, bounty, review, credit] : [parent?.id ?? '', id, action, objective, policy, evidence, recipient, bounty, review, credit], value: external });
-      if (result?.confirmed) router.push('/reviews/' + encodeURIComponent(id) + '?tx=' + encodeURIComponent(result.hash));
+      await submit({ functionName: mode, args: mode === 'commit' ? [id, action, objective, policy, evidence, recipient, bounty, review, credit] : [parent?.id ?? '', id, action, objective, policy, evidence, recipient, bounty, review, credit], value: external });
     } catch (error) {
       setValues(current => ({ ...current, error: sanitizeError(error, 'validation') }));
     }
