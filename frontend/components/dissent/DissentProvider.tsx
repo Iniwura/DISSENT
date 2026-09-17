@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { configState } from "@/lib/dissent/config";
-import { invalidateReadCache, loadMarketSnapshot, type ReadHealth } from "@/lib/dissent/data";
+import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, type ReadHealth } from "@/lib/dissent/data";
 import type { MarketSnapshot } from "@/lib/dissent/types";
 import { isUserRejectedError, normalizeWalletAddress } from "@/lib/dissent/wallet";
 import type { InjectedProvider } from "@/lib/dissent/wallet";
@@ -26,6 +26,7 @@ export type DissentContextValue = {
   loading: boolean;
   health: ReadHealth;
   refresh: () => void;
+  refreshProposal: (proposalId: string) => void;
   retry: () => void;
   canRetry: boolean;
   retryAvailableAt: number | null;
@@ -65,13 +66,16 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const lastSuccessfulRefreshRef = useRef(0);
   const lastRefreshRequestedRef = useRef(0);
   const previousWalletKeyRef = useRef<string | null>(null);
+  const targetedRefreshesRef = useRef(new Map<string, Promise<void>>());
 
   const walletAddress = address ? normalizeWalletAddress(address) : null;
+  const walletAddressRef = useRef(walletAddress);
   const walletKey = walletAddress && connector
     ? walletAddress + ":" + connector.id + ":" + (chainId ?? "unknown")
     : null;
 
   useEffect(() => { loadingRef.current = loading; }, [loading]);
+  useEffect(() => { walletAddressRef.current = walletAddress; }, [walletAddress]);
 
   const refresh = useCallback(() => {
     const requestedAt = Date.now();
@@ -91,6 +95,44 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
 
   const retry = useCallback(() => refresh(), [refresh]);
 
+  const refreshProposal = useCallback((proposalId: string) => {
+    const canonicalProposalId = proposalId.trim();
+    if (!canonicalProposalId || targetedRefreshesRef.current.has(canonicalProposalId)) return;
+    const requestedWalletAddress = walletAddress;
+    const request = loadTargetedProposal(canonicalProposalId, requestedWalletAddress)
+      .then((update) => {
+        if (walletAddressRef.current !== requestedWalletAddress) return;
+        setSnapshot((current) => {
+          if (!current) return current;
+          const proposalsById = new Map(current.proposals.map((proposal) => [proposal.id, proposal]));
+          proposalsById.set(update.proposal.id, update.proposal);
+          const nextIds = update.proposalIdsOffset === 0
+            ? update.proposalIds
+            : [...current.proposalIds.slice(0, update.proposalIdsOffset), ...update.proposalIds];
+          if (!nextIds.includes(update.proposal.id)) nextIds.push(update.proposal.id);
+          const uniqueIds = [...new Set(nextIds)];
+          return {
+            ...current,
+            proposalCount: update.proposalCount,
+            proposalIds: uniqueIds,
+            proposals: uniqueIds.flatMap((id) => {
+              const proposal = proposalsById.get(id);
+              return proposal ? [proposal] : [];
+            }),
+            accounting: update.accounting,
+            walletCredit: requestedWalletAddress ? update.walletCredit : current.walletCredit,
+          };
+        });
+        setDataError(null);
+      })
+      .catch((error: unknown) => {
+        if (walletAddressRef.current === requestedWalletAddress) setDataError(sanitizeError(error, "read"));
+      })
+      .finally(() => {
+        if (targetedRefreshesRef.current.get(canonicalProposalId) === request) targetedRefreshesRef.current.delete(canonicalProposalId);
+      });
+    targetedRefreshesRef.current.set(canonicalProposalId, request);
+  }, [walletAddress]);
   useEffect(() => {
     if (previousWalletKeyRef.current === walletKey) return;
     previousWalletKeyRef.current = walletKey;
@@ -244,13 +286,14 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     loading,
     health: !configState.ok ? "misconfigured" : loading ? "loading" : dataError ? "unavailable" : "healthy",
     refresh,
+    refreshProposal,
     retry,
     canRetry: !loading && (retryAvailableAt === null || retryClock >= retryAvailableAt),
     retryAvailableAt,
     wallet,
     disconnect,
     switchNetwork,
-  }), [dataError, disconnect, loading, refresh, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet]);
+  }), [dataError, disconnect, loading, refresh, refreshProposal, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet]);
 
   return <DissentContext.Provider value={value}>{children}</DissentContext.Provider>;
 }

@@ -42,6 +42,11 @@ export type PendingReconciliation =
   | { status: "failed"; hash: TransactionHash; error: string }
   | null;
 
+export type PendingWatchUpdate = {
+  phase: "accepted" | "awaiting_result" | "finalizing" | "confirmation_pending";
+  hash: TransactionHash;
+};
+
 const PENDING_WRITE_STORAGE_KEY = "dissent-pending-write-v1";
 
 type ClientProvider = NonNullable<NonNullable<Parameters<typeof createClient>[0]>["provider"]>;
@@ -107,6 +112,14 @@ function statusName(receipt: GenLayerTransaction): string | undefined {
   if (receipt.statusName) return receipt.statusName;
   if (typeof receipt.status === "number") return transactionsStatusNumberToName[String(receipt.status) as keyof typeof transactionsStatusNumberToName];
   return typeof receipt.status === "string" ? receipt.status : undefined;
+}
+
+async function readPendingReceipt(pending: PendingWrite): Promise<{ status: string | undefined; result: string | undefined } | null> {
+  const config = requireConfig();
+  const receipt = await createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash });
+  const recipient = transactionRecipient(receipt);
+  if (!recipient || recipient.toLowerCase() !== config.contractAddress.toLowerCase()) return null;
+  return { status: statusName(receipt), result: executionResultName(receipt) };
 }
 
 function executionResultName(receipt: GenLayerTransaction): string | undefined {
@@ -179,6 +192,60 @@ export async function reconcilePendingWrite(pending: PendingWrite): Promise<Pend
       return { status: "failed", hash: pending.hash, error: FAILED_AFTER_BROADCAST };
     }
   } catch { /* Keep pending record for a later reconciliation. */ }
+  return null;
+}
+
+const PENDING_WATCH_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+
+export async function watchPendingWrite(
+  pending: PendingWrite,
+  onProgress: (update: PendingWatchUpdate) => void,
+  signal?: AbortSignal,
+): Promise<PendingReconciliation> {
+  let delayIndex = 0;
+  let lastPhase: PendingWatchUpdate["phase"] | null = null;
+  const notify = (phase: PendingWatchUpdate["phase"]) => {
+    if (phase === lastPhase) return;
+    lastPhase = phase;
+    onProgress({ phase, hash: pending.hash });
+  };
+  while (!signal?.aborted) {
+    try {
+      const inspection = await readPendingReceipt(pending);
+      if (signal?.aborted) return null;
+      if (inspection?.status === "ACCEPTED") notify("accepted");
+      else if (inspection?.status === "FINALIZED") {
+        notify("finalizing");
+        if (inspection.result && inspection.result !== "FINISHED_WITH_RETURN") {
+          clearPendingWrite(pending);
+          return { status: "failed", hash: pending.hash, error: FAILED_AFTER_BROADCAST };
+        }
+        if (inspection.result === "FINISHED_WITH_RETURN") {
+          invalidateReadCache();
+          try {
+            if (await confirmContractState(pending.functionName, pending.proposalId, pending.secondaryId)) {
+              clearPendingWrite(pending);
+              return { status: "confirmed", hash: pending.hash };
+            }
+          } catch {
+            // Preserve the pending record and retry targeted contract reads below.
+          }
+          notify("confirmation_pending");
+        }
+      } else if (inspection?.status) {
+        notify("awaiting_result");
+      }
+    } catch {
+      // A transient RPC failure does not abandon the watcher or clear local state.
+    }
+    const delay = PENDING_WATCH_DELAYS_MS[Math.min(delayIndex, PENDING_WATCH_DELAYS_MS.length - 1)];
+    await new Promise<void>((resolve) => {
+      if (signal?.aborted) { resolve(); return; }
+      const timer = setTimeout(resolve, delay);
+      signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+    delayIndex = Math.min(delayIndex + 1, PENDING_WATCH_DELAYS_MS.length - 1);
+  }
   return null;
 }
 

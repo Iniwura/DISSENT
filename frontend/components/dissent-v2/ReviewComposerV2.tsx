@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useDissent } from "@/components/dissent/DissentProvider";
 import { isUserRejectedError } from "@/lib/dissent/wallet";
 import { formatMinimumWei, formatWei, validateIdentifier, type Proposal, type ProposalDetail } from "@/lib/dissent/types";
-import { getPendingWrite, parseGen, parseUint, reconcilePendingWrite, submitContractWrite, type DissentWriteRequest, type WriteProgress, U256_MAX, validateHttpsUrl, validateRecipient } from "@/lib/dissent/writes";
+import { getPendingWrite, parseGen, parseUint, submitContractWrite, type DissentWriteRequest, type PendingWrite, type WriteProgress, U256_MAX, validateHttpsUrl, validateRecipient, watchPendingWrite } from "@/lib/dissent/writes";
 import { EditorialAction, EditorialButton, EditorialLabel, SectionMarker } from "./Editorial";
 import { EditorialNotification } from "./EditorialNotification";
 import { DissentValidationError, PENDING_CONFIRMATION, sanitizeError } from "@/lib/dissent/errors";
@@ -30,34 +30,57 @@ type V2WriteOptions = {
 };
 
 function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOptions) {
-  const { wallet, refresh } = useDissent();
+  const { wallet, refreshProposal } = useDissent();
   const lockAfterConfirmation = options?.lockAfterConfirmation ?? true;
   const [progress, setProgress] = useState<WriteProgress>({ phase: "idle", hash: null, error: null });
   const mounted = useRef(true);
   const onConfirmedRef = useRef(onConfirmed);
-  useEffect(() => () => { mounted.current = false; }, []);
+  const watchingHashRef = useRef<string | null>(null);
+  const watchAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => { mounted.current = false; watchAbortRef.current?.abort(); }, []);
   useEffect(() => { onConfirmedRef.current = onConfirmed; }, [onConfirmed]);
   const notifyConfirmed = useCallback((functionName: string, proposalId: string, hash: string) => {
     if (!mounted.current || !onConfirmedRef.current || (functionName !== "commit" && functionName !== "revise")) return;
     onConfirmedRef.current(proposalId, hash);
   }, []);
-  useEffect(() => {
-    const pending = getPendingWrite();
-    if (!pending) return;
-    let cancelled = false;
-    setProgress({ phase: "confirmation_pending", hash: pending.hash, error: PENDING_CONFIRMATION });
-    void reconcilePendingWrite(pending).then((result) => {
-      if (cancelled || !mounted.current) return;
-      if (result?.status === "confirmed") {
+
+  const startWatcher = useCallback((pending: PendingWrite) => {
+    if (watchingHashRef.current === pending.hash) return;
+    watchAbortRef.current?.abort();
+    const controller = new AbortController();
+    watchingHashRef.current = pending.hash;
+    watchAbortRef.current = controller;
+    void watchPendingWrite(pending, (update) => {
+      if (!mounted.current) return;
+      setProgress({ phase: update.phase, hash: update.hash, error: update.phase === "confirmation_pending" ? PENDING_CONFIRMATION : null });
+    }, controller.signal).then((result) => {
+      if (watchingHashRef.current !== pending.hash) return;
+      watchingHashRef.current = null;
+      watchAbortRef.current = null;
+      if (!mounted.current || !result) return;
+      if (result.status === "confirmed") {
         setProgress({ phase: "confirmed", hash: result.hash, error: null });
-        refresh();
+        refreshProposal(pending.proposalId);
         notifyConfirmed(pending.functionName, pending.proposalId, result.hash);
-      } else if (result?.status === "failed") {
+      } else {
         setProgress({ phase: "failed", hash: result.hash, error: result.error });
       }
     });
-    return () => { cancelled = true; };
-  }, [refresh]);
+  }, [notifyConfirmed, refreshProposal]);
+
+  useEffect(() => {
+    const pending = getPendingWrite();
+    if (!pending) return;
+    setProgress({ phase: "confirmation_pending", hash: pending.hash, error: PENDING_CONFIRMATION });
+    startWatcher(pending);
+    return () => {
+      if (watchingHashRef.current === pending.hash) {
+        watchAbortRef.current?.abort();
+        watchingHashRef.current = null;
+        watchAbortRef.current = null;
+      }
+    };
+  }, [startWatcher]);
   const active = !["idle", "failed", "confirmed", "succeeded"].includes(progress.phase);
   const transactionLocked = active || (lockAfterConfirmation && progress.phase === "confirmed");
   const submit = useCallback(async (request: WriteRequest) => {
@@ -66,10 +89,20 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
     if (unavailable || !wallet.provider || !wallet.address) { setProgress({ phase: "failed", hash: null, error: unavailable ?? "Wallet unavailable." }); return null; }
     try {
       const result = await submitContractWrite({ ...request, walletAddress: wallet.address, provider: wallet.provider }, setProgress);
+      const proposalId = request.functionName === "revise" ? request.args[1] : request.args[0];
       if (result.confirmed) {
-        refresh();
-        const proposalId = request.functionName === "revise" ? request.args[1] : request.args[0];
-        if (typeof proposalId === "string") notifyConfirmed(request.functionName, proposalId, result.hash);
+        if (typeof proposalId === "string") {
+          refreshProposal(proposalId);
+          notifyConfirmed(request.functionName, proposalId, result.hash);
+        }
+      } else if (typeof proposalId === "string") {
+        startWatcher({
+          hash: result.hash,
+          functionName: request.functionName,
+          proposalId,
+          secondaryId: request.functionName === "challenge" && typeof request.args[1] === "string" ? request.args[1] : null,
+          createdAt: Date.now(),
+        });
       }
       return result;
     } catch (error) {
@@ -77,7 +110,7 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
       setProgress((current) => ({ phase: "failed", hash: current.hash, error: sanitizeError(error, "write") }));
       return null;
     }
-  }, [active, lockAfterConfirmation, notifyConfirmed, progress.phase, refresh, wallet]);
+  }, [active, lockAfterConfirmation, notifyConfirmed, progress.phase, refreshProposal, startWatcher, wallet]);
   return { progress, submit, active, transactionLocked };
 }
 

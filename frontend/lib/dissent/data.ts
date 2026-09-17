@@ -257,6 +257,40 @@ export async function loadProposalDetail(proposalId: string, proposalHint?: Prop
   return { proposal, challenges, canExecute };
 }
 
+export type TargetedMarketUpdate = {
+  proposal: Proposal;
+  proposalCount: bigint;
+  proposalIdsOffset: number;
+  proposalIds: string[];
+  accounting: Accounting;
+  walletCredit: bigint | null;
+};
+
+export async function loadTargetedProposal(proposalId: string, walletAddress: string | null): Promise<TargetedMarketUpdate> {
+  const canonicalProposalId = validateIdentifier(proposalId, "proposal ID");
+  const [detail, rawCount, rawAccounting] = await Promise.all([
+    loadProposalDetail(canonicalProposalId),
+    readContract("get_proposal_count"),
+    readContract("get_accounting"),
+  ]);
+  const proposalCount = toBigInt(rawCount, "proposal count");
+  if (proposalCount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Contract returned an invalid proposal count.");
+  const numericCount = Number(proposalCount);
+  const proposalIdsOffset = Math.max(0, numericCount - 50);
+  const [rawIds, rawCredit] = await Promise.all([
+    readContract("get_proposal_ids", [proposalIdsOffset, 50]),
+    walletAddress ? readContract("get_credit", [walletAddress]) : Promise.resolve(null),
+  ]);
+  return {
+    proposal: detail.proposal,
+    proposalCount,
+    proposalIdsOffset,
+    proposalIds: readIdList(rawIds),
+    accounting: readAccounting(rawAccounting),
+    walletCredit: rawCredit === null ? null : toBigInt(rawCredit, "wallet credit"),
+  };
+}
+
 export async function checkReadConnection(): Promise<void> {
   if (!configState.ok) throw new Error(configState.message);
   await readContract("get_config");
