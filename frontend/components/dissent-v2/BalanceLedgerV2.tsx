@@ -1,12 +1,18 @@
 "use client";
 
-import { CircleAlert, LockKeyhole, Wallet } from "lucide-react";
-import { useMemo } from "react";
+import Link from "next/link";
+import { ArrowUpRight, CircleAlert, LockKeyhole, Wallet } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { useDissent } from "@/components/dissent/DissentProvider";
-import { formatWei } from "@/lib/dissent/types";
+import { loadWalletChallenges } from "@/lib/dissent/data";
+import { formatWei, type Challenge } from "@/lib/dissent/types";
 import { EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
 
 const terminalStatuses = ["CLEAR", "REVISE", "BLOCK", "CANCELLED", "EXECUTED"] as const;
+type ChallengeLoadState = {
+  status: "idle" | "loading" | "complete" | "partial" | "error";
+  records: Challenge[];
+};
 
 export function BalanceLedgerV2() {
   const { snapshot, wallet, loading, dataError } = useDissent();
@@ -19,6 +25,37 @@ export function BalanceLedgerV2() {
     () => terminalStatuses.map((status) => ({ status, count: ownedReviews.filter((proposal) => proposal.status === status).length })).filter((item) => item.count > 0),
     [ownedReviews],
   );
+  const proposalKey = JSON.stringify(snapshot?.proposalIds ?? []);
+  const hasSnapshot = snapshot !== null;
+  const [challengeLoad, setChallengeLoad] = useState<ChallengeLoadState>({ status: "idle", records: [] });
+
+  useEffect(() => {
+    if (!wallet.connected || !wallet.address || !hasSnapshot) {
+      setChallengeLoad({ status: "idle", records: [] });
+      return;
+    }
+    let active = true;
+    const proposalIds = JSON.parse(proposalKey) as string[];
+    setChallengeLoad({ status: "loading", records: [] });
+    void loadWalletChallenges(wallet.address, proposalIds).then((result) => {
+      if (!active) return;
+      setChallengeLoad({
+        status: result.complete ? "complete" : "partial",
+        records: result.challenges,
+      });
+    }).catch(() => {
+      if (active) setChallengeLoad({ status: "error", records: [] });
+    });
+    return () => {
+      active = false;
+    };
+  }, [hasSnapshot, proposalKey, wallet.address, wallet.connected]);
+
+  const challengeCount = challengeLoad.status === "complete"
+    ? challengeLoad.records.length.toString()
+    : challengeLoad.status === "loading"
+      ? "Loading..."
+      : "Unavailable";
 
   return (
     <div className="dv2-page dv2-balance-page">
@@ -50,7 +87,7 @@ export function BalanceLedgerV2() {
             <section className="dv2-balance-hero">
               <div>
                 <EditorialLabel>Settled credit</EditorialLabel>
-                <strong>{credit === null || credit === undefined ? "—" : formatWei(credit)}</strong>
+                <strong>{credit === null || credit === undefined ? "-" : formatWei(credit)}</strong>
                 <span>Reusable inside Dissent. Not wallet cash. {wallet.address}</span>
               </div>
               <div className="dv2-balance-lock">
@@ -72,16 +109,41 @@ export function BalanceLedgerV2() {
               </div>
               <div className="dv2-profile-stat">
                 <EditorialLabel>Challenges submitted</EditorialLabel>
-                <strong>Unavailable</strong>
-                <small>The public market snapshot does not expose challenger identities.</small>
+                <strong>{challengeCount}</strong>
+                <small>{challengeLoad.status === "complete" ? "Filtered by this wallet's challenger address." : challengeLoad.status === "partial" ? "Some challenge reads failed; the count is not complete." : challengeLoad.status === "error" ? "Challenge records are temporarily unavailable." : "Loaded from the contract's challenge index."}</small>
               </div>
+            </section>
+
+            <section className="dv2-profile-challenges" aria-labelledby="dv2-profile-challenges-title">
+              <div className="dv2-ledger-head">
+                <EditorialLabel>Submitted challenges</EditorialLabel>
+                <span id="dv2-profile-challenges-title">{challengeLoad.status === "complete" ? String(challengeLoad.records.length).padStart(2, "0") : "-"}</span>
+              </div>
+              {challengeLoad.status === "complete" && challengeLoad.records.length === 0 ? (
+                <p className="dv2-profile-unavailable">No challenge records are associated with this wallet in the loaded proposal index.</p>
+              ) : challengeLoad.records.length > 0 ? (
+                challengeLoad.records.map((challenge) => (
+                  <div className="dv2-profile-challenge" key={challenge.id}>
+                    <div>
+                      <EditorialLabel>{challenge.status}</EditorialLabel>
+                      <p>{challenge.objection}</p>
+                    </div>
+                    <Link href={"/reviews/" + encodeURIComponent(challenge.proposalId)} aria-label={"Open review " + challenge.proposalId}>
+                      Review <ArrowUpRight size={14} aria-hidden="true" />
+                    </Link>
+                  </div>
+                ))
+              ) : (
+                <p className="dv2-profile-unavailable">{challengeLoad.status === "loading" ? "Loading challenge records..." : "Challenge records are unavailable; no count is shown."}</p>
+              )}
+              {challengeLoad.status === "partial" && challengeLoad.records.length > 0 && <p className="dv2-profile-unavailable">Some proposal challenge indexes could not be read. Showing confirmed records only.</p>}
             </section>
 
             <div className="dv2-ledger-layout">
               <section className="dv2-ledger">
                 <div className="dv2-ledger-head"><EditorialLabel>Available outcomes</EditorialLabel><span>{String(outcomeCounts.length).padStart(2, "0")}</span></div>
                 {outcomeCounts.length === 0 ? (
-                  <div className="dv2-ledger-row is-muted"><span>—</span><strong>No recorded outcomes</strong><small>Your created reviews will appear here as the contract records them.</small></div>
+                  <div className="dv2-ledger-row is-muted"><span>-</span><strong>No recorded outcomes</strong><small>Your created reviews will appear here as the contract records them.</small></div>
                 ) : outcomeCounts.map(({ status, count }, index) => (
                   <div className="dv2-ledger-row" key={status}><span>{String(index + 1).padStart(2, "0")}</span><strong>{status}</strong><small>{count} review{count === 1 ? "" : "s"} currently recorded with this outcome.</small></div>
                 ))}
@@ -89,7 +151,7 @@ export function BalanceLedgerV2() {
               </section>
               <aside className="dv2-credit-note">
                 <EditorialLabel>Profile note</EditorialLabel>
-                <p>Reviews created is derived from the loaded on-chain proposal index. Challenge submissions require challenger-level reads that are not part of the current market snapshot, so no number is invented here.</p>
+                <p>Reviews created is derived from the loaded on-chain proposal index. Challenge submissions are filtered from each indexed challenge record and never inferred from proposal challenge counts.</p>
               </aside>
             </div>
           </>

@@ -254,6 +254,31 @@ export async function loadMarketSnapshot(walletAddress: string | null): Promise<
   return { config, accounting, proposalCount, proposalIds, proposals, walletCredit };
 }
 
+export type WalletChallengeLoad = {
+  challenges: Challenge[];
+  complete: boolean;
+  failedProposalIds: string[];
+};
+
+export async function loadWalletChallenges(walletAddress: string, proposalIds: string[]): Promise<WalletChallengeLoad> {
+  const canonicalWallet = walletAddress.toLowerCase();
+  const canonicalProposalIds = proposalIds.map((proposalId) => validateIdentifier(proposalId, "proposal ID"));
+  const results = await mapWithConcurrency(canonicalProposalIds, MAX_PARALLEL_DETAIL_READS, async (proposalId) => {
+    try {
+      const challengeIds = readIdList(await readContract("get_proposal_challenge_ids", [proposalId]));
+      const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (challengeId) => readChallenge(await readContract("get_challenge", [challengeId])));
+      return { proposalId, challenges, failed: false };
+    } catch {
+      return { proposalId, challenges: [], failed: true };
+    }
+  });
+  return {
+    challenges: results.flatMap((result) => result.challenges).filter((challenge) => challenge.challenger.toLowerCase() === canonicalWallet),
+    complete: results.every((result) => !result.failed),
+    failedProposalIds: results.filter((result) => result.failed).map((result) => result.proposalId),
+  };
+}
+
 export async function loadProposalDetail(proposalId: string, proposalHint?: Proposal): Promise<ProposalDetail> {
   const canonicalProposalId = validateIdentifier(proposalId, "proposal ID");
   const [rawProposal, rawChallengeIds] = await Promise.all([
