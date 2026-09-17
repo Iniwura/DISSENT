@@ -4,7 +4,19 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { configState } from "@/lib/dissent/config";
 import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, rateLimitCooldownUntil, type ReadHealth } from "@/lib/dissent/data";
-import type { MarketSnapshot } from "@/lib/dissent/types";
+import type { MarketSnapshot, ProposalDetail } from "@/lib/dissent/types";
+import {
+  emptyNotificationStore,
+  loadNotificationStore,
+  markAllNotificationsRead,
+  markNotificationRead,
+  notificationScopeKey,
+  observeProposalDetail,
+  observeSnapshot,
+  persistNotificationStore,
+  type DissentNotification,
+  type NotificationStore,
+} from "@/lib/dissent/notifications";
 import { isUserRejectedError, normalizeWalletAddress } from "@/lib/dissent/wallet";
 import type { InjectedProvider } from "@/lib/dissent/wallet";
 import { STUDIO_NEXT_CHAIN_ID } from "@/lib/dissent/network";
@@ -31,6 +43,10 @@ export type DissentContextValue = {
   canRetry: boolean;
   retryAvailableAt: number | null;
   wallet: WalletState;
+  notifications: DissentNotification[];
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
+  recordProposalDetail: (detail: ProposalDetail) => void;
   disconnect: () => void;
   switchNetwork: () => Promise<void>;
 };
@@ -63,6 +79,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const [providerError, setProviderError] = useState<string | null>(null);
   const [retryAvailableAt, setRetryAvailableAt] = useState<number | null>(null);
   const [retryClock, setRetryClock] = useState(() => Date.now());
+  const [notificationStore, setNotificationStore] = useState<NotificationStore>(emptyNotificationStore);
   const loadingRef = useRef(loading);
   const refreshQueuedRef = useRef(false);
   const retryCooldownRef = useRef(0);
@@ -70,15 +87,31 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const lastRefreshRequestedRef = useRef(0);
   const previousWalletKeyRef = useRef<string | null>(null);
   const targetedRefreshesRef = useRef(new Map<string, Promise<boolean>>());
+  const notificationStoreRef = useRef<NotificationStore>(emptyNotificationStore());
+  const notificationScopeRef = useRef<string | null>(null);
+  const notificationReadyRef = useRef(false);
 
   const walletAddress = address ? normalizeWalletAddress(address) : null;
   const walletAddressRef = useRef(walletAddress);
   const walletKey = walletAddress && connector
     ? walletAddress + ":" + connector.id + ":" + (chainId ?? "unknown")
     : null;
+  const notificationKey = notificationScopeKey(
+    walletAddress,
+    walletAddress && isConnected ? chainId : null,
+    configState.ok ? configState.value.contractAddress : null,
+  );
 
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { walletAddressRef.current = walletAddress; }, [walletAddress]);
+  useEffect(() => {
+    notificationScopeRef.current = notificationKey;
+    notificationReadyRef.current = false;
+    const next = notificationKey ? loadNotificationStore(notificationKey) : emptyNotificationStore();
+    notificationStoreRef.current = next;
+    setNotificationStore(next);
+    notificationReadyRef.current = true;
+  }, [notificationKey]);
 
   const refresh = useCallback(() => {
     const requestedAt = Date.now();
@@ -216,6 +249,38 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   }, [refreshToken, walletAddress]);
 
   useEffect(() => {
+    if (!snapshot || !walletAddress || !notificationKey || !notificationReadyRef.current) return;
+    const next = observeSnapshot(notificationStoreRef.current, snapshot, walletAddress);
+    notificationStoreRef.current = next;
+    setNotificationStore(next);
+    persistNotificationStore(notificationKey, next);
+  }, [notificationKey, snapshot, walletAddress]);
+
+  const updateNotificationStore = useCallback((update: (current: NotificationStore) => NotificationStore) => {
+    const scope = notificationScopeRef.current;
+    if (!scope || !notificationReadyRef.current) return;
+    const next = update(notificationStoreRef.current);
+    if (next === notificationStoreRef.current) return;
+    notificationStoreRef.current = next;
+    setNotificationStore(next);
+    persistNotificationStore(scope, next);
+  }, []);
+
+  const recordProposalDetail = useCallback((detail: ProposalDetail) => {
+    const account = walletAddressRef.current;
+    if (!account) return;
+    updateNotificationStore((current) => observeProposalDetail(current, detail, account));
+  }, [updateNotificationStore]);
+
+  const markRead = useCallback((id: string) => {
+    updateNotificationStore((current) => markNotificationRead(current, id));
+  }, [updateNotificationStore]);
+
+  const markAllRead = useCallback(() => {
+    updateNotificationStore(markAllNotificationsRead);
+  }, [updateNotificationStore]);
+
+  useEffect(() => {
     let pollTimer: number | null = null;
     const clearPoll = () => {
       if (pollTimer !== null) {
@@ -308,9 +373,13 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     canRetry: !loading && (retryAvailableAt === null || retryClock >= retryAvailableAt),
     retryAvailableAt,
     wallet,
+    notifications: notificationStore.notifications,
+    markNotificationRead: markRead,
+    markAllNotificationsRead: markAllRead,
+    recordProposalDetail,
     disconnect,
     switchNetwork,
-  }), [dataError, disconnect, loading, refresh, refreshProposal, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet]);
+  }), [dataError, disconnect, loading, markAllRead, markRead, notificationStore.notifications, recordProposalDetail, refresh, refreshProposal, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet]);
 
   return <DissentContext.Provider value={value}>{children}</DissentContext.Provider>;
 }

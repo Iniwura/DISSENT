@@ -11,7 +11,7 @@ import { ProposalActionsV2 } from "./ReviewBuilderV2";
 import { EditorialButton, EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
 
 export function ReviewDossierV2({ proposalId }: { proposalId: string }) {
-  const { snapshot } = useDissent();
+  const { snapshot, recordProposalDetail } = useDissent();
   const [detail, setDetail] = useState<ProposalDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,6 +33,7 @@ export function ReviewDossierV2({ proposalId }: { proposalId: string }) {
       if (active) {
         detailLoadedRef.current = true;
         setDetail(value);
+        recordProposalDetail(value);
         setError(null);
       }
     }).catch(() => {
@@ -41,7 +42,7 @@ export function ReviewDossierV2({ proposalId }: { proposalId: string }) {
       if (!detailLoadedRef.current) setDetail(null);
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [proposalId, snapshot]);
+  }, [proposalId, recordProposalDetail, snapshot]);
   if (loading) return <div className="dv2-page"><GridFrame><div className="dv2-dossier-loading"><i /><i /><i /></div></GridFrame></div>;
   if (!detail) return <div className="dv2-page"><GridFrame><Link className="dv2-back" href="/reviews"><ArrowLeft size={15} /> Back to reviews</Link><div className="dv2-not-found"><SectionMarker number="404" label="Registry lookup" /><h1>{error === "Live review data is temporarily unavailable." ? "Review unavailable." : "Review not found."}</h1><p>{error ?? "No proposal with that ID is present in the deployed review registry."}</p><EditorialButton href="/reviews">Return to reviews</EditorialButton></div></GridFrame></div>;
   const { proposal, challenges } = detail;
