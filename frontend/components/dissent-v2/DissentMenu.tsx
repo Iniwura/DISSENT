@@ -13,7 +13,7 @@ export function DissentMenu({ open, onClose }: { open: boolean; onClose: () => v
         <nav aria-label="Menu navigation" className="dv2-menu-links">
           <Link href="/reviews" onClick={onClose}><span>01</span>Reviews<ArrowUpRight size={18} /></Link>
           <Link href="/reviews/new" onClick={onClose}><span>02</span>Start a Review<ArrowUpRight size={18} /></Link>
-          <Link href="/balance" onClick={onClose}><span>03</span>Balance<ArrowUpRight size={18} /></Link>
+          <Link href="/profile" onClick={onClose}><span>03</span>Profile<ArrowUpRight size={18} /></Link>
         </nav>
       </div>
       <div className="dv2-menu-foot"><span>STUDIO NEXT / CHAIN 61997</span><span>PUBLIC READS / WALLET OPTIONAL</span></div>

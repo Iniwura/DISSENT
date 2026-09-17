@@ -13,7 +13,7 @@ import { NotificationsPanel } from './NotificationsPanel';
 const links = [
   { href: '/reviews', label: 'Reviews' },
   { href: '/reviews/new', label: 'Start a Review' },
-  { href: '/balance', label: 'Balance' },
+  { href: '/profile', label: 'Profile' },
 ];
 
 export function DissentHeader() {
