@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { configState } from "@/lib/dissent/config";
-import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, type ReadHealth } from "@/lib/dissent/data";
+import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, rateLimitCooldownUntil, type ReadHealth } from "@/lib/dissent/data";
 import type { MarketSnapshot } from "@/lib/dissent/types";
 import { isUserRejectedError, normalizeWalletAddress } from "@/lib/dissent/wallet";
 import type { InjectedProvider } from "@/lib/dissent/wallet";
@@ -26,7 +26,7 @@ export type DissentContextValue = {
   loading: boolean;
   health: ReadHealth;
   refresh: () => void;
-  refreshProposal: (proposalId: string) => void;
+  refreshProposal: (proposalId: string) => Promise<boolean>;
   retry: () => void;
   canRetry: boolean;
   retryAvailableAt: number | null;
@@ -42,6 +42,9 @@ type ProviderCapableConnector = {
 function hasProviderGetter(value: unknown): value is ProviderCapableConnector {
   return typeof value === "object" && value !== null && "getProvider" in value && typeof value.getProvider === "function";
 }
+
+const MARKET_REFRESH_STALE_MS = 30_000;
+const MARKET_REFRESH_INTERVAL_MS = 30_000;
 
 const DissentContext = createContext<DissentContextValue | null>(null);
 
@@ -66,7 +69,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const lastSuccessfulRefreshRef = useRef(0);
   const lastRefreshRequestedRef = useRef(0);
   const previousWalletKeyRef = useRef<string | null>(null);
-  const targetedRefreshesRef = useRef(new Map<string, Promise<void>>());
+  const targetedRefreshesRef = useRef(new Map<string, Promise<boolean>>());
 
   const walletAddress = address ? normalizeWalletAddress(address) : null;
   const walletAddressRef = useRef(walletAddress);
@@ -88,20 +91,22 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     }
     lastRefreshRequestedRef.current = requestedAt;
     invalidateReadCache();
-    setDataError(null);
     loadingRef.current = true;
     setRefreshToken((value) => value + 1);
   }, []);
 
   const retry = useCallback(() => refresh(), [refresh]);
 
-  const refreshProposal = useCallback((proposalId: string) => {
+  const refreshProposal = useCallback((proposalId: string): Promise<boolean> => {
     const canonicalProposalId = proposalId.trim();
-    if (!canonicalProposalId || targetedRefreshesRef.current.has(canonicalProposalId)) return;
+    if (!canonicalProposalId) return Promise.resolve(false);
+    const existing = targetedRefreshesRef.current.get(canonicalProposalId);
+    if (existing) return existing;
     const requestedWalletAddress = walletAddress;
+    const startedAt = Date.now();
     const request = loadTargetedProposal(canonicalProposalId, requestedWalletAddress)
       .then((update) => {
-        if (walletAddressRef.current !== requestedWalletAddress) return;
+        if (walletAddressRef.current !== requestedWalletAddress) return false;
         setSnapshot((current) => {
           if (!current) return current;
           const proposalsById = new Map(current.proposals.map((proposal) => [proposal.id, proposal]));
@@ -123,15 +128,26 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
             walletCredit: requestedWalletAddress ? update.walletCredit : current.walletCredit,
           };
         });
+        lastSuccessfulRefreshRef.current = Date.now();
         setDataError(null);
+        return true;
       })
       .catch((error: unknown) => {
-        if (walletAddressRef.current === requestedWalletAddress) setDataError(sanitizeError(error, "read"));
+        if (walletAddressRef.current === requestedWalletAddress && startedAt >= lastSuccessfulRefreshRef.current) {
+          if (isRateLimitError(error)) {
+            const until = Math.max(Date.now(), rateLimitCooldownUntil());
+            retryCooldownRef.current = until;
+            setRetryAvailableAt(until);
+          }
+          setDataError(sanitizeError(error, "read"));
+        }
+        return false;
       })
       .finally(() => {
         if (targetedRefreshesRef.current.get(canonicalProposalId) === request) targetedRefreshesRef.current.delete(canonicalProposalId);
       });
     targetedRefreshesRef.current.set(canonicalProposalId, request);
+    return request;
   }, [walletAddress]);
   useEffect(() => {
     if (previousWalletKeyRef.current === walletKey) return;
@@ -162,6 +178,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   useEffect(() => {
     let cancelled = false;
     if (!configState.ok) return () => { cancelled = true; };
+    const startedAt = Date.now();
     setLoading(true);
     loadMarketSnapshot(walletAddress)
       .then((value) => {
@@ -175,10 +192,10 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
         }
       })
       .catch((error) => {
-        if (!cancelled) {
+        if (!cancelled && startedAt >= lastSuccessfulRefreshRef.current) {
           const message = sanitizeError(error, "read");
           if (isRateLimitError(error)) {
-            const until = Date.now() + 5_000;
+            const until = Math.max(Date.now(), rateLimitCooldownUntil());
             retryCooldownRef.current = until;
             setRetryAvailableAt(until);
           }
@@ -208,7 +225,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     };
     const refreshIfStale = () => {
       if (document.visibilityState !== "visible") return;
-      if (lastSuccessfulRefreshRef.current !== 0 && Date.now() - lastSuccessfulRefreshRef.current >= 5_000) refresh();
+      if (lastSuccessfulRefreshRef.current !== 0 && Date.now() - lastSuccessfulRefreshRef.current >= MARKET_REFRESH_STALE_MS) refresh();
     };
     const schedulePoll = () => {
       clearPoll();
@@ -217,7 +234,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
         pollTimer = null;
         refresh();
         schedulePoll();
-      }, 15_000);
+      }, MARKET_REFRESH_INTERVAL_MS);
     };
     const refreshOnVisible = () => {
       if (document.visibilityState === "visible") {

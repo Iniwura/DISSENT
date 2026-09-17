@@ -2,7 +2,7 @@ import { createTransactionKit } from "@genlayer/transaction-kit";
 import { createClient } from "genlayer-js";
 import { transactionsStatusNumberToName, executionResultNumberToName, type CalldataEncodable, type GenLayerTransaction, type TransactionHash } from "genlayer-js/types";
 import { configState, requireConfig } from "./config";
-import { invalidateReadCache, readContract } from "./data";
+import { invalidateReadCache, readContract, runRateLimitedRead } from "./data";
 import { studioNext } from "./network";
 import { readWalletChainId } from "./wallet";
 import type { InjectedProvider } from "./wallet";
@@ -50,6 +50,8 @@ export type PendingWatchUpdate = {
 const PENDING_WRITE_STORAGE_KEY = "dissent-pending-write-v1";
 
 type ClientProvider = NonNullable<NonNullable<Parameters<typeof createClient>[0]>["provider"]>;
+
+const pendingTransactionReads = new Map<string, Promise<GenLayerTransaction>>();
 
 function proposalIdFor(functionName: string, args: CalldataEncodable[]): string | null {
   const value = functionName === "revise" ? args[1] : args[0];
@@ -114,9 +116,22 @@ function statusName(receipt: GenLayerTransaction): string | undefined {
   return typeof receipt.status === "string" ? receipt.status : undefined;
 }
 
+async function readPendingTransaction(pending: PendingWrite): Promise<GenLayerTransaction> {
+  const key = pending.hash.toLowerCase();
+  const existing = pendingTransactionReads.get(key);
+  if (existing) return existing;
+  const config = requireConfig();
+  const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash }))
+    .finally(() => {
+      if (pendingTransactionReads.get(key) === request) pendingTransactionReads.delete(key);
+    });
+  pendingTransactionReads.set(key, request);
+  return request;
+}
+
 async function readPendingReceipt(pending: PendingWrite): Promise<{ status: string | undefined; result: string | undefined } | null> {
   const config = requireConfig();
-  const receipt = await createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash });
+  const receipt = await readPendingTransaction(pending);
   const recipient = transactionRecipient(receipt);
   if (!recipient || recipient.toLowerCase() !== config.contractAddress.toLowerCase()) return null;
   return { status: statusName(receipt), result: executionResultName(receipt) };
@@ -167,7 +182,7 @@ export async function confirmContractState(functionName: string, proposalId: str
 export async function reconcilePendingWrite(pending: PendingWrite): Promise<PendingReconciliation> {
   try {
     const config = requireConfig();
-    const receipt = await createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash });
+    const receipt = await readPendingTransaction(pending);
     const recipient = transactionRecipient(receipt);
     if (!recipient || recipient.toLowerCase() !== config.contractAddress.toLowerCase()) return null;
     const currentStatus = statusName(receipt);

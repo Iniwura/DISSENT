@@ -75,30 +75,40 @@ let nextRateLimitRetryAt = 0;
 const RATE_LIMIT_RETRY_SPACING_MS = 250;
 
 async function waitForRateLimitRetry(error: unknown, retryNumber: number): Promise<void> {
-  const delay = Math.min(4_000, retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS * (2 ** retryNumber));
+  const delay = retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS * (2 ** retryNumber);
   const now = Date.now();
   const retryAt = Math.max(now + delay, nextRateLimitRetryAt);
   nextRateLimitRetryAt = retryAt + RATE_LIMIT_RETRY_SPACING_MS;
   await wait(Math.max(0, retryAt - now));
 }
 
-async function readContractOnce(functionName: string, args: (string | number | bigint)[]): Promise<unknown> {
+export function rateLimitCooldownUntil(): number {
+  return nextRateLimitRetryAt;
+}
+
+export async function runRateLimitedRead<T>(operation: () => Promise<T>): Promise<T> {
   let retries = 0;
   while (true) {
     try {
-      const config = requireConfig();
-      return await getClient().readContract({
-        address: config.contractAddress,
-        functionName,
-        args,
-        transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
-      });
+      return await operation();
     } catch (error) {
       if (retries >= MAX_RATE_LIMIT_RETRIES || !isRateLimitError(error)) throw error;
       retries += 1;
       await waitForRateLimitRetry(error, retries);
     }
   }
+}
+
+async function readContractOnce(functionName: string, args: (string | number | bigint)[]): Promise<unknown> {
+  return runRateLimitedRead(async () => {
+    const config = requireConfig();
+    return getClient().readContract({
+        address: config.contractAddress,
+        functionName,
+        args,
+        transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
+      });
+  });
 }
 
 export async function readContract(functionName: string, args: (string | number | bigint)[] = []): Promise<unknown> {

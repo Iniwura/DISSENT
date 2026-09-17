@@ -53,14 +53,14 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
     void watchPendingWrite(pending, (update) => {
       if (!mounted.current) return;
       setProgress({ phase: update.phase, hash: update.hash, error: update.phase === "confirmation_pending" ? PENDING_CONFIRMATION : null });
-    }, controller.signal).then((result) => {
+    }, controller.signal).then(async (result) => {
       if (watchingHashRef.current !== pending.hash) return;
       watchingHashRef.current = null;
       watchAbortRef.current = null;
       if (!mounted.current || !result) return;
       if (result.status === "confirmed") {
         setProgress({ phase: "confirmed", hash: result.hash, error: null });
-        refreshProposal(pending.proposalId);
+        await refreshProposal(pending.proposalId);
         notifyConfirmed(pending.functionName, pending.proposalId, result.hash);
       } else {
         setProgress({ phase: "failed", hash: result.hash, error: result.error });
@@ -92,7 +92,7 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
       const proposalId = request.functionName === "revise" ? request.args[1] : request.args[0];
       if (result.confirmed) {
         if (typeof proposalId === "string") {
-          refreshProposal(proposalId);
+          await refreshProposal(proposalId);
           notifyConfirmed(request.functionName, proposalId, result.hash);
         }
       } else if (typeof proposalId === "string") {
