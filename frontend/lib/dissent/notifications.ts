@@ -190,20 +190,20 @@ export function observeSnapshot(store: NotificationStore, snapshot: MarketSnapsh
   return next.initialized ? next : { ...next, initialized: true };
 }
 
-export function observeProposalDetail(store: NotificationStore, detail: ProposalDetail, walletAddress: string, now = Date.now()): NotificationStore {
+export function observeWalletChallenges(store: NotificationStore, challenges: ProposalDetail["challenges"], walletAddress: string, now = Date.now()): NotificationStore {
   const currentAddress = addressName(walletAddress);
   let next = store;
-  for (const challenge of detail.challenges) {
+  for (const challenge of challenges) {
+    if (addressName(challenge.challenger) !== currentAddress) continue;
     const currentStatus = statusName(challenge.status);
     const previous = store.challenges[challenge.id];
-    if (store.initialized && previous && previous.status !== currentStatus &&
-        addressName(challenge.challenger) === currentAddress && ["ACCEPTED", "REJECTED"].includes(currentStatus)) {
+    if (store.initialized && previous && previous.status !== currentStatus && ["ACCEPTED", "REJECTED"].includes(currentStatus)) {
       next = addNotification(next, notification(
         "challenge-resolved",
-        `challenge:${challenge.id}:resolved:${currentStatus}`,
-        `Your challenge was ${currentStatus.toLowerCase()}`,
-        `The contract recorded your challenge as ${currentStatus.toLowerCase()} for ${detail.proposal.id}.`,
-        detail.proposal.id,
+        "challenge:" + challenge.id + ":resolved:" + currentStatus,
+        "Your challenge was " + currentStatus.toLowerCase(),
+        "The contract recorded your challenge as " + currentStatus.toLowerCase() + " for " + challenge.proposalId + ".",
+        challenge.proposalId,
         now,
       ));
     }
@@ -218,6 +218,9 @@ export function observeProposalDetail(store: NotificationStore, detail: Proposal
   return next;
 }
 
+export function observeProposalDetail(store: NotificationStore, detail: ProposalDetail, walletAddress: string, now = Date.now()): NotificationStore {
+  return observeWalletChallenges(store, detail.challenges, walletAddress, now);
+}
 export function markNotificationRead(store: NotificationStore, id: string): NotificationStore {
   if (!store.notifications.some((item) => item.id === id && !item.read)) return store;
   return { ...store, notifications: store.notifications.map((item) => item.id === id ? { ...item, read: true } : item) };

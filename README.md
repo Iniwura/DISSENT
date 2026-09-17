@@ -9,7 +9,36 @@ GenLayer validators independently inspect the cited sources and return one of
 three verdicts: `CLEAR`, `REVISE`, or `BLOCK`. Dissent controls proposal escrow
 and settled Dissent credits; it does not execute arbitrary textual actions.
 
-## First executable slice
+## Live proof
+
+Live application: https://dissent-rho.vercel.app/
+
+The authoritative Studio Next deployment is finalized and accepted:
+
+- RPC: https://studio-next.genlayer.com/api
+- Chain ID: 61997
+- Contract: 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C
+- Deployment transaction: 0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523
+- Explorer: https://explorer-studio-dev.genlayer.com/tx/0x4424678c1a13882fa820befb8455e50a6d46c41cd0721398996920259ab6a523
+
+Completed wallet-driven review: quick-test-20260917-cu65m. The contract recorded BLOCK with one ACCEPTED challenge.
+
+- Review escrow after settlement: bounty 0, execution bond 0, challenge stake 0 outstanding.
+- Recorded settlement allocation: the challenger receives 1,100,000,000,000,000,000 wei (1 GEN bounty share plus 0.1 GEN stake); the proposer receives the 1,000 wei execution-bond refund.
+- Current observed account credits: proposer 2,000,000,000,000,001,000 wei; challenger 1,100,000,000,000,000,000 wei.
+- Current aggregate accounting read: 6,000,000,000,000,006,000 wei outstanding escrow and 3,100,000,000,000,001,000 wei settled credits.
+
+These are contract reads, not a claim that a BLOCK verdict is independent proof of safety. Dissent is an opt-in gate, and settled credits remain reusable inside Dissent rather than becoming wallet cash.
+
+Wallet-free verification from the repository root:
+
+genlayer schema 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_config --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_accounting --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_proposal_count --rpc https://studio-next.genlayer.com/api
+genlayer call 0x8BD79Ac285FBd87147B9A64BfF60436C050A684C get_proposal_ids --rpc https://studio-next.genlayer.com/api --args 0 50
+
+## Verified protocol surface
 
 The current intelligent contract implements:
 
@@ -33,9 +62,9 @@ The current intelligent contract implements:
   alternative to adjudication
 - checked u256 accounting, minimum execution bonds, and bounded evidence prompts
 
-The first scenario is the Agent Tank pitch example: a treasury agent proposes a
-deposit into a 40% APY pool, and challenger agents investigate whether an
-anonymous upgrade key can put principal at risk.
+The agents/ package contains a local planner and fixture scenario for reproducible
+development. It is not proof of wallet-driven operation; the deployed review and
+settlement above are the demonstrated on-chain evidence.
 
 ## Local setup
 
@@ -52,6 +81,7 @@ Run the fast contract tests without Studio:
 
 ```shell
 PYTHONPATH=. pytest tests/direct/test_dissent.py -q
+PYTHONPATH=. pytest tests/agents/ -q
 ```
 
 Run the local multi-agent scenario and inspect the exact transaction plan:
@@ -184,20 +214,21 @@ deploy/deployScript.ts           Contract deployment
 frontend/                        Next.js application
 ```
 
-## Local demo
+## Local agent planner
 
-The review desk currently runs the canonical treasury case as a clearly labelled
-local demonstration. It visualizes agent investigation, GenLayer deliberation,
-the final verdict, and challenge outcomes. It does not present simulated activity
-as an on-chain transaction.
+The agents/ package is a local planner and fixture harness for preparing proposal,
+challenge and adjudication inputs. It does not submit the completed wallet-driven
+review above and must not be read as simulated activity on the deployed contract.
 
-The deployment script configures a minimum 300-unit bounty, 100-unit challenge
-stake, and 1,000-unit execution bond. The isolated Studio browser harness waits
-for finalization and verifies settled Dissent credits after execution and
-challenged settlement. It does not submit or verify an external payout. Dissent
-does not stop actions performed outside the opt-in gate and does not execute
-arbitrary textual actions. Prompt-injection resistance is bounded validation,
-not a proof that malicious prose can never influence an LLM.
+Run the local planner and inspect its exact transaction plan:
+
+PYTHONPATH=. python -m agents.run_demo
+
+The isolated Studio browser harness is a separate integration tool. It waits for
+finalization and verifies settled Dissent credits; it does not submit or verify an
+external payout. Dissent does not stop actions performed outside the opt-in gate and
+does not execute arbitrary textual actions. Prompt-injection resistance is bounded
+validation, not a proof that malicious prose can never influence an LLM.
 
 ## Studio Next frontend target
 

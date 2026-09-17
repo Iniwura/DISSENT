@@ -2,9 +2,8 @@
 
 import Link from "next/link";
 import { ArrowUpRight, CircleAlert, LockKeyhole, Wallet } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useDissent } from "@/components/dissent/DissentProvider";
-import { loadWalletChallenges } from "@/lib/dissent/data";
 import { formatWei, type Challenge } from "@/lib/dissent/types";
 import { EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
 
@@ -15,7 +14,7 @@ type ChallengeLoadState = {
 };
 
 export function BalanceLedgerV2() {
-  const { snapshot, wallet, loading, dataError } = useDissent();
+  const { snapshot, wallet, loading, dataError, walletChallenges, walletChallengesLoading } = useDissent();
   const credit = snapshot?.walletCredit;
   const ownedReviews = useMemo(
     () => snapshot?.proposals.filter((proposal) => Boolean(wallet.address && proposal.proposer.toLowerCase() === wallet.address.toLowerCase())) ?? [],
@@ -25,32 +24,13 @@ export function BalanceLedgerV2() {
     () => terminalStatuses.map((status) => ({ status, count: ownedReviews.filter((proposal) => proposal.status === status).length })).filter((item) => item.count > 0),
     [ownedReviews],
   );
-  const proposalKey = JSON.stringify(snapshot?.proposalIds ?? []);
-  const hasSnapshot = snapshot !== null;
-  const [challengeLoad, setChallengeLoad] = useState<ChallengeLoadState>({ status: "idle", records: [] });
-
-  useEffect(() => {
-    if (!wallet.connected || !wallet.address || !hasSnapshot) {
-      setChallengeLoad({ status: "idle", records: [] });
-      return;
-    }
-    let active = true;
-    const proposalIds = JSON.parse(proposalKey) as string[];
-    setChallengeLoad({ status: "loading", records: [] });
-    void loadWalletChallenges(wallet.address, proposalIds).then((result) => {
-      if (!active) return;
-      setChallengeLoad({
-        status: result.complete ? "complete" : "partial",
-        records: result.challenges,
-      });
-    }).catch(() => {
-      if (active) setChallengeLoad({ status: "error", records: [] });
-    });
-    return () => {
-      active = false;
-    };
-  }, [hasSnapshot, proposalKey, wallet.address, wallet.connected]);
-
+  const challengeLoad: ChallengeLoadState = !wallet.connected
+    ? { status: "idle", records: [] }
+    : walletChallenges
+      ? { status: walletChallenges.complete ? "complete" : "partial", records: walletChallenges.challenges }
+      : walletChallengesLoading
+        ? { status: "loading", records: [] }
+        : { status: "error", records: [] };
   const challengeCount = challengeLoad.status === "complete"
     ? challengeLoad.records.length.toString()
     : challengeLoad.status === "loading"

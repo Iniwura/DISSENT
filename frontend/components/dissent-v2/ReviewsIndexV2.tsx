@@ -7,7 +7,7 @@ import { useDissent } from "@/components/dissent/DissentProvider";
 import { formatTimestamp, formatWei } from "@/lib/dissent/types";
 import { EditorialAction, EditorialButton, EditorialLabel, GridFrame, SectionMarker } from "./Editorial";
 
-const filters = ["Open bounties", "Closing soon", "Challenged", "Resolved", "My activity"] as const;
+const filters = ["Open bounties", "Closing soon", "Challenged", "Awaiting verdict", "Resolved", "My activity"] as const;
 type ReviewFilter = (typeof filters)[number];
 const CLOSING_SOON_SECONDS = 24 * 60 * 60;
 
@@ -28,7 +28,7 @@ function formatCountdown(deadline: bigint, now: number) {
 }
 
 export function ReviewsIndexV2() {
-  const { snapshot, loading, dataError, retry, canRetry, wallet } = useDissent();
+  const { snapshot, loading, dataError, retry, canRetry, wallet, walletChallenges } = useDissent();
   const [filter, setFilter] = useState<ReviewFilter>("Open bounties");
   const [query, setQuery] = useState("");
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
@@ -38,24 +38,32 @@ export function ReviewsIndexV2() {
     return () => window.clearInterval(timer);
   }, []);
 
+  const challengedProposalIds = useMemo(
+    () => new Set((walletChallenges?.challenges ?? []).map((challenge) => challenge.proposalId)),
+    [walletChallenges?.challenges],
+  );
+
   const rows = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const address = wallet.address?.toLowerCase();
     return (snapshot?.proposals ?? []).filter((proposal) => {
+      const remaining = remainingSeconds(proposal.challengeDeadline, now);
       const matchesFilter =
         filter === "Open bounties"
-          ? proposal.status === "OPEN"
+          ? proposal.status === "OPEN" && remaining > 0n
           : filter === "Closing soon"
-            ? proposal.status === "OPEN" && remainingSeconds(proposal.challengeDeadline, now) > 0n && remainingSeconds(proposal.challengeDeadline, now) <= BigInt(CLOSING_SOON_SECONDS)
+            ? proposal.status === "OPEN" && remaining > 0n && remaining <= BigInt(CLOSING_SOON_SECONDS)
             : filter === "Challenged"
               ? proposal.challengeCount > 0n
-              : filter === "Resolved"
-                ? proposal.status !== "OPEN"
-                : Boolean(address && proposal.proposer.toLowerCase() === address);
+              : filter === "Awaiting verdict"
+                ? proposal.status === "OPEN" && remaining === 0n
+                : filter === "Resolved"
+                  ? proposal.status !== "OPEN"
+                  : Boolean(address && (proposal.proposer.toLowerCase() === address || challengedProposalIds.has(proposal.id)));
       const matchesQuery = !normalizedQuery || [proposal.id, proposal.action, proposal.objective].some((value) => value.toLowerCase().includes(normalizedQuery));
       return matchesFilter && matchesQuery;
     });
-  }, [filter, now, query, snapshot?.proposals, wallet.address]);
+  }, [challengedProposalIds, filter, now, query, snapshot?.proposals, wallet.address]);
 
   const emptyTitle = filter === "My activity" && !wallet.address
     ? "Connect a wallet to view your activity."
@@ -125,7 +133,7 @@ export function ReviewsIndexV2() {
                 className="dv2-registry-row"
                 href={"/reviews/" + encodeURIComponent(proposal.id)}
                 key={proposal.id}
-                aria-label={`Inspect and challenge review ${proposal.id}`}
+                aria-label={(proposal.status === "OPEN" && remainingSeconds(proposal.challengeDeadline, now) > 0n ? "Inspect and challenge" : "Inspect") + " review " + proposal.id}
               >
                 <span className="dv2-registry-id">
                   <b>{String(index + 1).padStart(3, "0")}</b>
@@ -140,12 +148,13 @@ export function ReviewsIndexV2() {
                   <strong>{proposal.status === "OPEN" ? formatCountdown(proposal.challengeDeadline, now) : proposal.status}</strong>
                   <small>{formatTimestamp(proposal.challengeDeadline)}</small>
                 </span>
-                <span className="dv2-market-cta">Inspect &amp; challenge <ArrowUpRight size={14} aria-hidden="true" /></span>
+                <span className="dv2-market-cta">{proposal.status === "OPEN" && remainingSeconds(proposal.challengeDeadline, now) > 0n ? "Inspect & challenge" : "Inspect review"} <ArrowUpRight size={14} aria-hidden="true" /></span>
               </Link>
             ))}
           </div>
         )}
 
+        {wallet.address && walletChallenges && !walletChallenges.complete && <p className="dv2-stale-note" role="status">Some wallet activity reads are unavailable; showing confirmed activity only.</p>}
         {dataError && snapshot && <p className="dv2-stale-note" role="status">Showing the last finalized snapshot while the latest read is unavailable.</p>}
       </GridFrame>
     </div>

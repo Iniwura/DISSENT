@@ -3,7 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { configState } from "@/lib/dissent/config";
-import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, rateLimitCooldownUntil, type ReadHealth } from "@/lib/dissent/data";
+import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, loadWalletChallenges, rateLimitCooldownUntil, type ReadHealth, type WalletChallengeLoad } from "@/lib/dissent/data";
 import type { MarketSnapshot, ProposalDetail } from "@/lib/dissent/types";
 import {
   emptyNotificationStore,
@@ -13,6 +13,7 @@ import {
   notificationScopeKey,
   observeProposalDetail,
   observeSnapshot,
+  observeWalletChallenges,
   persistNotificationStore,
   type DissentNotification,
   type NotificationStore,
@@ -43,6 +44,8 @@ export type DissentContextValue = {
   canRetry: boolean;
   retryAvailableAt: number | null;
   wallet: WalletState;
+  walletChallenges: WalletChallengeLoad | null;
+  walletChallengesLoading: boolean;
   notifications: DissentNotification[];
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
@@ -62,6 +65,19 @@ function hasProviderGetter(value: unknown): value is ProviderCapableConnector {
 const MARKET_REFRESH_STALE_MS = 30_000;
 const MARKET_REFRESH_INTERVAL_MS = 30_000;
 
+function mergeWalletChallengeLoad(previous: WalletChallengeLoad | null, next: WalletChallengeLoad): WalletChallengeLoad {
+  if (next.complete || !previous) return next;
+  const failed = new Set(next.failedProposalIds);
+  const seen = new Set(next.challenges.map((challenge) => challenge.id));
+  return {
+    ...next,
+    challenges: [
+      ...next.challenges,
+      ...previous.challenges.filter((challenge) => failed.has(challenge.proposalId) && !seen.has(challenge.id)),
+    ],
+  };
+}
+
 const DissentContext = createContext<DissentContextValue | null>(null);
 
 export function DissentProvider({ children }: Readonly<{ children: React.ReactNode }>) {
@@ -80,6 +96,8 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const [retryAvailableAt, setRetryAvailableAt] = useState<number | null>(null);
   const [retryClock, setRetryClock] = useState(() => Date.now());
   const [notificationStore, setNotificationStore] = useState<NotificationStore>(emptyNotificationStore);
+  const [walletChallenges, setWalletChallenges] = useState<WalletChallengeLoad | null>(null);
+  const [walletChallengesLoading, setWalletChallengesLoading] = useState(false);
   const loadingRef = useRef(loading);
   const refreshQueuedRef = useRef(false);
   const retryCooldownRef = useRef(0);
@@ -90,6 +108,9 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const notificationStoreRef = useRef<NotificationStore>(emptyNotificationStore());
   const notificationScopeRef = useRef<string | null>(null);
   const notificationReadyRef = useRef(false);
+  const walletChallengeLoadRef = useRef(0);
+  const walletChallengesRef = useRef<WalletChallengeLoad | null>(null);
+  const walletChallengeScopeRef = useRef<string | null>(null);
 
   const walletAddress = address ? normalizeWalletAddress(address) : null;
   const walletAddressRef = useRef(walletAddress);
@@ -101,6 +122,9 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     walletAddress && isConnected ? chainId : null,
     configState.ok ? configState.value.contractAddress : null,
   );
+  const walletChallengeScope = walletAddress && isConnected
+    ? "" + walletAddress.toLowerCase() + ":" + (chainId ?? "unknown") + ":" + (configState.ok ? configState.value.contractAddress.toLowerCase() : "unknown")
+    : null;
 
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { walletAddressRef.current = walletAddress; }, [walletAddress]);
@@ -112,6 +136,15 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     setNotificationStore(next);
     notificationReadyRef.current = true;
   }, [notificationKey]);
+
+  useEffect(() => {
+    if (walletChallengeScopeRef.current === walletChallengeScope) return;
+    walletChallengeScopeRef.current = walletChallengeScope;
+    walletChallengeLoadRef.current += 1;
+    walletChallengesRef.current = null;
+    setWalletChallenges(null);
+    setWalletChallengesLoading(false);
+  }, [walletChallengeScope]);
 
   const refresh = useCallback(() => {
     const requestedAt = Date.now();
@@ -249,6 +282,43 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   }, [refreshToken, walletAddress]);
 
   useEffect(() => {
+    const requestedWalletAddress = walletAddress;
+    const proposalIds = snapshot?.proposalIds;
+    const loadId = ++walletChallengeLoadRef.current;
+    if (!requestedWalletAddress || !isConnected || !proposalIds) {
+      walletChallengesRef.current = null;
+      setWalletChallenges(null);
+      setWalletChallengesLoading(false);
+      return;
+    }
+    let active = true;
+    setWalletChallengesLoading(true);
+    void loadWalletChallenges(requestedWalletAddress, proposalIds)
+      .then((result) => {
+        if (!active || loadId !== walletChallengeLoadRef.current || walletAddressRef.current !== requestedWalletAddress) return;
+        const merged = mergeWalletChallengeLoad(walletChallengesRef.current, result);
+        walletChallengesRef.current = merged;
+        setWalletChallenges(merged);
+      })
+      .catch(() => {
+        // Keep the last successful challenge records during a transient read failure.
+      })
+      .finally(() => {
+        if (active && loadId === walletChallengeLoadRef.current) setWalletChallengesLoading(false);
+      });
+    return () => { active = false; };
+  }, [isConnected, snapshot, walletAddress]);
+
+  useEffect(() => {
+    if (!walletChallenges || !walletAddress || !notificationKey || !notificationReadyRef.current) return;
+    const next = observeWalletChallenges(notificationStoreRef.current, walletChallenges.challenges, walletAddress);
+    if (next === notificationStoreRef.current) return;
+    notificationStoreRef.current = next;
+    setNotificationStore(next);
+    persistNotificationStore(notificationKey, next);
+  }, [notificationKey, walletAddress, walletChallenges]);
+
+  useEffect(() => {
     if (!snapshot || !walletAddress || !notificationKey || !notificationReadyRef.current) return;
     const next = observeSnapshot(notificationStoreRef.current, snapshot, walletAddress);
     notificationStoreRef.current = next;
@@ -373,13 +443,15 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     canRetry: !loading && (retryAvailableAt === null || retryClock >= retryAvailableAt),
     retryAvailableAt,
     wallet,
+    walletChallenges,
+    walletChallengesLoading,
     notifications: notificationStore.notifications,
     markNotificationRead: markRead,
     markAllNotificationsRead: markAllRead,
     recordProposalDetail,
     disconnect,
     switchNetwork,
-  }), [dataError, disconnect, loading, markAllRead, markRead, notificationStore.notifications, recordProposalDetail, refresh, refreshProposal, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet]);
+  }), [dataError, disconnect, loading, markAllRead, markRead, notificationStore.notifications, recordProposalDetail, refresh, refreshProposal, retry, retryAvailableAt, retryClock, switchNetwork, visibleSnapshot, wallet, walletChallenges, walletChallengesLoading]);
 
   return <DissentContext.Provider value={value}>{children}</DissentContext.Provider>;
 }
