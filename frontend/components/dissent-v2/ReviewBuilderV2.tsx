@@ -202,14 +202,14 @@ function stageReady(step: ComposerStep, values: FormValues, dissent: DissentCont
   }
 }
 
-export function ReviewBuilderV2({ mode, parent, initialKind, onBackToEntry }: { mode: SubmissionMode; parent?: Proposal; initialKind?: DraftKind; onBackToEntry?: () => void }) {
+export function ReviewBuilderV2({ mode, parent, initialKind, onBackToEntry, lockAfterConfirmation = true }: { mode: SubmissionMode; parent?: Proposal; initialKind?: DraftKind; onBackToEntry?: () => void; lockAfterConfirmation?: boolean }) {
   const dissent = useDissent();
   const { snapshot, wallet } = dissent;
   const router = useRouter();
   const navigateAfterConfirmation = useCallback((reviewId: string) => {
     router.push("/reviews/" + encodeURIComponent(reviewId));
   }, [router]);
-  const { progress, submit, active, transactionLocked } = useV2Write(navigateAfterConfirmation);
+  const { progress, submit, active, transactionLocked } = useV2Write(navigateAfterConfirmation, { lockAfterConfirmation });
   const seededId = useRef(mode === 'revise');
   const [step, setStep] = useState<ComposerStep>(1);
   const [selected, setSelected] = useState<DraftKind | null>(mode === 'revise' ? 'custom' : initialKind ?? null);
@@ -284,12 +284,12 @@ export function StartReviewFormV2() {
   if (kind === 'custom') return <ReviewBuilderV2 mode='commit' initialKind='custom' onBackToEntry={() => setKind(null)} />;
   return <ModeEntry selected={kind} onSelect={setKind} />;
 }
-export function ReviseFormV2({ parent }: { parent: Proposal }) { return <ReviewBuilderV2 mode='revise' parent={parent} />; }
+export function ReviseFormV2({ parent }: { parent: Proposal }) { return <ReviewBuilderV2 mode='revise' parent={parent} lockAfterConfirmation={false} />; }
 
-export function ChallengeFormV2({ proposal }: { proposal: Proposal }) {
+export function ChallengeFormV2({ proposal, lockAfterConfirmation = true }: { proposal: Proposal; lockAfterConfirmation?: boolean }) {
   const dissent = useDissent();
   const { snapshot, wallet } = dissent;
-  const { progress, submit, active, transactionLocked } = useV2Write();
+  const { progress, submit, active, transactionLocked } = useV2Write(undefined, { lockAfterConfirmation });
   const [values, setValues] = useState({ id: proposal.id + '-objection-1', objection: '', evidence: '', external: '0.1', credit: '0', error: '' });
   const minimumStake = snapshot?.config.minimumStake ?? 0n;
   const availability = writeAvailability(wallet);
@@ -313,9 +313,9 @@ export function ChallengeFormV2({ proposal }: { proposal: Proposal }) {
   return <form className='dv2-challenge-form' onSubmit={event => void onSubmit(event)} noValidate><EditorialLabel>Material objection</EditorialLabel><h3>Challenge this review.</h3><div className='dv2-field-grid'><Field label='Challenge ID' value={values.id} onChange={value => setValue('id', value)} /><Field label='Evidence URL' value={values.evidence} onChange={value => setValue('evidence', value)} /></div><Area label='Objection' value={values.objection} onChange={value => setValue('objection', value)} placeholder='What material flaw should validators inspect?' /><div className='dv2-field-grid'><Field label='External GEN' value={values.external} onChange={value => setValue('external', value)} hint={'Minimum challenge stake: ' + formatMinimumWei(minimumStake)} /><Field label='Settled credit GEN' value={values.credit} onChange={value => setValue('credit', value)} /></div>{values.error && <p className='dv2-form-error' role='alert'><CircleAlert size={15} />{values.error}</p>}<button className='dv2-button dv2-button-red' type='submit' disabled={Boolean(availability) || transactionLocked}>{active ? 'Transaction in progress' : transactionLocked ? 'Confirmed' : 'Submit challenge'}<ArrowUpRight size={15} /></button>{availability && <p className='dv2-form-availability'><LockKeyhole size={14} />{availability}</p>}{progress.phase !== 'idle' && <div className='dv2-write-progress' role={progress.phase === 'failed' ? 'alert' : 'status'}><span>{progress.phase === 'failed' ? progress.error ?? 'Something went wrong. Please try again.' : progress.phase}</span></div>}</form>;
 }
 
-export function SimpleWriteButtonV2({ functionName, proposalId, label, note }: { functionName: 'adjudicate' | 'execute' | 'cancel'; proposalId: string; label: string; note: string }) {
+export function SimpleWriteButtonV2({ functionName, proposalId, label, note, lockAfterConfirmation = true }: { functionName: 'adjudicate' | 'execute' | 'cancel'; proposalId: string; label: string; note: string; lockAfterConfirmation?: boolean }) {
   const { wallet } = useDissent();
-  const { progress, submit, active, transactionLocked } = useV2Write();
+  const { progress, submit, active, transactionLocked } = useV2Write(undefined, { lockAfterConfirmation });
   const availability = writeAvailability(wallet);
   return <div className='dv2-simple-write'><button className='dv2-button dv2-button-red' type='button' onClick={() => void submit({ functionName, args: [proposalId], value: 0n })} disabled={Boolean(availability) || transactionLocked}>{active ? 'Transaction in progress' : transactionLocked ? 'Confirmed' : label}<ArrowUpRight size={15} /></button><p>{note}</p>{availability && <span className='dv2-form-availability'><LockKeyhole size={14} />{availability}</span>}{progress.phase !== 'idle' && <div className='dv2-write-progress' role={progress.phase === 'failed' ? 'alert' : 'status'}><span>{progress.phase === 'failed' ? progress.error ?? 'Something went wrong. Please try again.' : progress.phase}</span></div>}</div>;
 }
@@ -328,5 +328,5 @@ export function ProposalActionsV2({ detail }: { detail: ProposalDetail }) {
   const proposer = Boolean(wallet.address) && wallet.address?.toLowerCase() === proposal.proposer.toLowerCase();
   const afterDeadline = now >= proposal.challengeDeadline;
   const recovery = now >= proposal.challengeDeadline + (snapshot?.config.cancellationGraceSeconds ?? 604800n);
-  return <section className='dv2-action-rail'><EditorialLabel>Permitted action</EditorialLabel><h2>What happens next?</h2>{proposal.status === 'OPEN' && !afterDeadline && !proposer && <details className='dv2-disclosure'><summary>Challenge this review <ArrowRight size={15} /></summary><ChallengeFormV2 proposal={proposal} /></details>}{proposal.status === 'OPEN' && !afterDeadline && proposer && <p className='dv2-muted'>The proposer cannot challenge its own review.</p>}{proposal.status === 'OPEN' && afterDeadline && <SimpleWriteButtonV2 functionName='adjudicate' proposalId={proposal.id} label='Adjudicate review' note='Permissionless after the challenge deadline; validator consensus decides the outcome.' />}{proposal.status === 'OPEN' && recovery && <SimpleWriteButtonV2 functionName='cancel' proposalId={proposal.id} label='Recover unresolved escrow' note='Permissionless recovery after the configured grace period; no model or web execution is used.' />}{proposal.status === 'REVISE' && proposer && !proposal.supersededBy && <details className='dv2-disclosure'><summary>Submit a revision <ArrowRight size={15} /></summary><ReviseFormV2 parent={proposal} /></details>}{proposal.status === 'REVISE' && !proposer && !proposal.supersededBy && <p className='dv2-muted'>Only the original proposer can create the direct replacement.</p>}{proposal.status === 'CLEAR' && detail.canExecute && proposer && <SimpleWriteButtonV2 functionName='execute' proposalId={proposal.id} label='Execute review gate' note={'Proposer-only. The outstanding bond becomes settled credit for ' + proposal.executionRecipient + '.'} />}{proposal.status === 'CLEAR' && detail.canExecute && !proposer && <p className='dv2-muted'>Only the proposer can consume this execution gate.</p>}{['BLOCK', 'CANCELLED', 'EXECUTED'].includes(proposal.status) && <p className='dv2-terminal'><ShieldCheck size={15} />Terminal state. Replay is rejected by the contract.</p>}</section>;
+  return <section className='dv2-action-rail'><EditorialLabel>Permitted action</EditorialLabel><h2>What happens next?</h2>{proposal.status === 'OPEN' && !afterDeadline && !proposer && <details className='dv2-disclosure'><summary>Challenge this review <ArrowRight size={15} /></summary><ChallengeFormV2 proposal={proposal} lockAfterConfirmation={false} /></details>}{proposal.status === 'OPEN' && !afterDeadline && proposer && <p className='dv2-muted'>The proposer cannot challenge its own review.</p>}{proposal.status === 'OPEN' && afterDeadline && <SimpleWriteButtonV2 functionName='adjudicate' proposalId={proposal.id} label='Adjudicate review' note='Permissionless after the challenge deadline; validator consensus decides the outcome.' lockAfterConfirmation={false} />}{proposal.status === 'OPEN' && recovery && <SimpleWriteButtonV2 functionName='cancel' proposalId={proposal.id} label='Recover unresolved escrow' note='Permissionless recovery after the configured grace period; no model or web execution is used.' lockAfterConfirmation={false} />}{proposal.status === 'REVISE' && proposer && !proposal.supersededBy && <details className='dv2-disclosure'><summary>Submit a revision <ArrowRight size={15} /></summary><ReviseFormV2 parent={proposal} /></details>}{proposal.status === 'REVISE' && !proposer && !proposal.supersededBy && <p className='dv2-muted'>Only the original proposer can create the direct replacement.</p>}{proposal.status === 'CLEAR' && detail.canExecute && proposer && <SimpleWriteButtonV2 functionName='execute' proposalId={proposal.id} label='Execute review gate' note={'Proposer-only. The outstanding bond becomes settled credit for ' + proposal.executionRecipient + '.'} lockAfterConfirmation={false} />}{proposal.status === 'CLEAR' && detail.canExecute && !proposer && <p className='dv2-muted'>Only the proposer can consume this execution gate.</p>}{['BLOCK', 'CANCELLED', 'EXECUTED'].includes(proposal.status) && <p className='dv2-terminal'><ShieldCheck size={15} />Terminal state. Replay is rejected by the contract.</p>}</section>;
 }
