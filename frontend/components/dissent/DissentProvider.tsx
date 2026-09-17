@@ -63,6 +63,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   const refreshQueuedRef = useRef(false);
   const retryCooldownRef = useRef(0);
   const lastSuccessfulRefreshRef = useRef(0);
+  const lastRefreshRequestedRef = useRef(0);
   const previousWalletKeyRef = useRef<string | null>(null);
 
   const walletAddress = address ? normalizeWalletAddress(address) : null;
@@ -73,11 +74,15 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   useEffect(() => { loadingRef.current = loading; }, [loading]);
 
   const refresh = useCallback(() => {
-    if (!configState.ok || Date.now() < retryCooldownRef.current) return;
+    const requestedAt = Date.now();
+    if (!configState.ok || requestedAt < retryCooldownRef.current) return;
+    if (requestedAt - lastRefreshRequestedRef.current < 1_000) return;
     if (loadingRef.current) {
       refreshQueuedRef.current = true;
+      lastRefreshRequestedRef.current = requestedAt;
       return;
     }
+    lastRefreshRequestedRef.current = requestedAt;
     invalidateReadCache();
     setDataError(null);
     loadingRef.current = true;
@@ -152,17 +157,41 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
   }, [refreshToken, walletAddress]);
 
   useEffect(() => {
+    let pollTimer: number | null = null;
+    const clearPoll = () => {
+      if (pollTimer !== null) {
+        window.clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+    };
     const refreshIfStale = () => {
+      if (document.visibilityState !== "visible") return;
       if (lastSuccessfulRefreshRef.current !== 0 && Date.now() - lastSuccessfulRefreshRef.current >= 5_000) refresh();
     };
+    const schedulePoll = () => {
+      clearPoll();
+      if (document.visibilityState !== "visible") return;
+      pollTimer = window.setTimeout(() => {
+        pollTimer = null;
+        refresh();
+        schedulePoll();
+      }, 15_000);
+    };
     const refreshOnVisible = () => {
-      if (document.visibilityState === "visible") refreshIfStale();
+      if (document.visibilityState === "visible") {
+        refreshIfStale();
+        schedulePoll();
+      } else {
+        clearPoll();
+      }
     };
     window.addEventListener("focus", refreshIfStale);
     document.addEventListener("visibilitychange", refreshOnVisible);
+    schedulePoll();
     return () => {
       window.removeEventListener("focus", refreshIfStale);
       document.removeEventListener("visibilitychange", refreshOnVisible);
+      clearPoll();
     };
   }, [refresh]);
 

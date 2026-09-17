@@ -73,3 +73,21 @@
 @media (max-width:760px){.dv2-explanation-section .dv2-sticky-intro h2{max-width:100%;font-size:clamp(40px,11vw,58px)}.dv2-live-head>p{margin-top:12px}.dv2-evidence-section .dv2-section-head{margin-bottom:28px}.dv2-evidence-grid>div:nth-last-child(-n+3){border-bottom:1px solid rgba(240,237,228,.45)}.dv2-evidence-grid>div:last-child{border-bottom:0}.dv2-hero-source-inline{margin-top:22px}.dv2-hero-scroll-source{display:none}}
 @media (min-width:761px){.dv2-hero-visual{bottom:14%}}
 @media (min-width:1051px){.dv2-hero-copy h1{font-size:clamp(56px,6vw,112px)}.dv2-hero-copy h1 em{white-space:nowrap}}
+/* Review action countdown and accessible challenge dialog */
+.dv2-challenge-countdown{margin:18px 0 20px;padding:14px 0 16px;border-block:1px solid var(--dv2-line)}
+.dv2-challenge-countdown .dv2-label{margin-bottom:10px;color:var(--dv2-red)}
+.dv2-countdown-digits{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.dv2-countdown-digits span{display:grid;gap:2px;min-width:0}
+.dv2-countdown-digits strong{font:700 clamp(21px,2.2vw,32px)/1 var(--dv2-mono);letter-spacing:-.08em;font-variant-numeric:tabular-nums}
+.dv2-countdown-digits small{color:var(--dv2-grey);font:10px var(--dv2-mono);text-transform:uppercase}
+.dv2-challenge-countdown.is-closed{border-color:var(--dv2-red)}
+.dv2-challenge-countdown.is-closed strong{display:block;color:var(--dv2-red);font-size:19px;line-height:1.1}
+.dv2-challenge-trigger{width:100%;justify-content:space-between;margin:8px 0 14px;font-size:13px}
+.dv2-dialog-backdrop{position:fixed;inset:0;z-index:80;display:grid;place-items:center;padding:96px 24px 24px;background:rgba(13,13,13,.72)}
+.dv2-dialog-backdrop[hidden]{display:none}
+.dv2-dialog{width:min(620px,calc(100vw - 48px));max-height:calc(100vh - 120px);overflow:auto;padding:24px;border:1px solid var(--dv2-line);background:var(--dv2-paper);color:var(--dv2-ink);box-shadow:10px 10px 0 var(--dv2-red)}
+.dv2-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding-bottom:18px;border-bottom:1px solid var(--dv2-line)}
+.dv2-dialog-head h2{margin:8px 0 0;font-size:clamp(29px,4vw,48px);letter-spacing:-.08em;line-height:.9}
+.dv2-dialog-close{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;border:1px solid var(--dv2-line);background:transparent;color:inherit;cursor:pointer}
+.dv2-dialog .dv2-challenge-form{padding:18px 0 0}
+@media (max-width:760px){.dv2-challenge-countdown{margin-top:16px}.dv2-countdown-digits strong{font-size:20px}.dv2-countdown-digits small{font-size:9px}.dv2-dialog-backdrop{align-items:start;padding:82px 16px 16px}.dv2-dialog{width:calc(100vw - 32px);max-height:calc(100svh - 98px);padding:18px;box-shadow:6px 6px 0 var(--dv2-red)}}
