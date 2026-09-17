@@ -121,7 +121,7 @@ async function readPendingTransaction(pending: PendingWrite): Promise<GenLayerTr
   const existing = pendingTransactionReads.get(key);
   if (existing) return existing;
   const config = requireConfig();
-  const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash }))
+  const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash }), "critical")
     .finally(() => {
       if (pendingTransactionReads.get(key) === request) pendingTransactionReads.delete(key);
     });
@@ -153,17 +153,17 @@ function rawProposalStatus(raw: unknown): string | null {
 }
 
 async function proposalIsIndexed(proposalId: string): Promise<boolean> {
-  const rawCount = await readContract("get_proposal_count");
+  const rawCount = await readContract("get_proposal_count", [], "critical");
   const count = typeof rawCount === "bigint" ? rawCount : typeof rawCount === "number" && Number.isSafeInteger(rawCount) && rawCount >= 0 ? BigInt(rawCount) : typeof rawCount === "string" && /^\d+$/.test(rawCount) ? BigInt(rawCount) : null;
   if (count === null || count === 0n) return false;
   const offset = count > 50n ? count - 50n : 0n;
-  return rawList(await readContract("get_proposal_ids", [offset, 50])).includes(proposalId);
+  return rawList(await readContract("get_proposal_ids", [offset, 50], "critical")).includes(proposalId);
 }
 
 async function proposalIsReadable(proposalId: string): Promise<boolean> {
   if (!await proposalIsIndexed(proposalId)) return false;
   try {
-    return rawProposalStatus(await readContract("get_proposal", [proposalId])) !== null;
+    return rawProposalStatus(await readContract("get_proposal", [proposalId], "critical")) !== null;
   } catch {
     return false;
   }
@@ -171,8 +171,8 @@ async function proposalIsReadable(proposalId: string): Promise<boolean> {
 
 export async function confirmContractState(functionName: string, proposalId: string, secondaryId: string | null = null): Promise<boolean> {
   if (functionName === "commit" || functionName === "revise") return proposalIsReadable(proposalId);
-  if (functionName === "challenge") return Boolean(secondaryId && rawList(await readContract("get_proposal_challenge_ids", [proposalId])).includes(secondaryId));
-  const state = rawProposalStatus(await readContract("get_proposal", [proposalId]));
+  if (functionName === "challenge") return Boolean(secondaryId && rawList(await readContract("get_proposal_challenge_ids", [proposalId], "critical")).includes(secondaryId));
+  const state = rawProposalStatus(await readContract("get_proposal", [proposalId], "critical"));
   if (functionName === "adjudicate") return state !== null && state !== "OPEN";
   if (functionName === "execute") return state === "EXECUTED";
   if (functionName === "cancel") return state === "CANCELLED";

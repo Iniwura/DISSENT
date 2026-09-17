@@ -1,9 +1,10 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { configState } from "@/lib/dissent/config";
-import { invalidateReadCache, loadMarketSnapshot, loadTargetedProposal, loadWalletChallenges, rateLimitCooldownUntil, type ReadHealth, type WalletChallengeLoad } from "@/lib/dissent/data";
+import { invalidateReadCache, loadLandingSnapshot, loadMarketSnapshot, loadTargetedProposal, loadWalletChallenges, rateLimitCooldownUntil, type ReadHealth, type WalletChallengeLoad } from "@/lib/dissent/data";
 import type { MarketSnapshot, ProposalDetail } from "@/lib/dissent/types";
 import {
   emptyNotificationStore,
@@ -81,6 +82,7 @@ function mergeWalletChallengeLoad(previous: WalletChallengeLoad | null, next: Wa
 const DissentContext = createContext<DissentContextValue | null>(null);
 
 export function DissentProvider({ children }: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
   const { address, connector, isConnected } = useAccount();
   const chainId = useChainId();
   const { connectors, error: connectError } = useConnect();
@@ -170,7 +172,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     if (existing) return existing;
     const requestedWalletAddress = walletAddress;
     const startedAt = Date.now();
-    const request = loadTargetedProposal(canonicalProposalId, requestedWalletAddress)
+    const request = loadTargetedProposal(canonicalProposalId, requestedWalletAddress, "critical")
       .then((update) => {
         if (walletAddressRef.current !== requestedWalletAddress) return false;
         setSnapshot((current) => {
@@ -246,7 +248,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     if (!configState.ok) return () => { cancelled = true; };
     const startedAt = Date.now();
     setLoading(true);
-    loadMarketSnapshot(walletAddress)
+    (pathname === "/" ? loadLandingSnapshot(walletAddress) : loadMarketSnapshot(walletAddress))
       .then((value) => {
         if (!cancelled) {
           lastSuccessfulRefreshRef.current = Date.now();
@@ -279,13 +281,14 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
         }
       });
     return () => { cancelled = true; };
-  }, [refreshToken, walletAddress]);
+  }, [pathname, refreshToken, walletAddress]);
 
   useEffect(() => {
     const requestedWalletAddress = walletAddress;
+    const shouldLoadWalletChallenges = pathname === "/reviews" || pathname === "/profile" || pathname === "/balance" || pathname === "/credits";
     const proposalIds = snapshot?.proposalIds;
     const loadId = ++walletChallengeLoadRef.current;
-    if (!requestedWalletAddress || !isConnected || !proposalIds) {
+    if (!requestedWalletAddress || !isConnected || !shouldLoadWalletChallenges || !proposalIds) {
       walletChallengesRef.current = null;
       setWalletChallenges(null);
       setWalletChallengesLoading(false);
@@ -293,7 +296,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
     }
     let active = true;
     setWalletChallengesLoading(true);
-    void loadWalletChallenges(requestedWalletAddress, proposalIds)
+    void loadWalletChallenges(requestedWalletAddress, proposalIds, "interactive")
       .then((result) => {
         if (!active || loadId !== walletChallengeLoadRef.current || walletAddressRef.current !== requestedWalletAddress) return;
         const merged = mergeWalletChallengeLoad(walletChallengesRef.current, result);
@@ -307,7 +310,7 @@ export function DissentProvider({ children }: Readonly<{ children: React.ReactNo
         if (active && loadId === walletChallengeLoadRef.current) setWalletChallengesLoading(false);
       });
     return () => { active = false; };
-  }, [isConnected, snapshot, walletAddress]);
+  }, [isConnected, pathname, snapshot, walletAddress]);
 
   useEffect(() => {
     if (!walletChallenges || !walletAddress || !notificationKey || !notificationReadyRef.current) return;

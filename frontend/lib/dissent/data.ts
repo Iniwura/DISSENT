@@ -32,6 +32,9 @@ function getClient() {
 export type ReadHealth = "loading" | "healthy" | "unavailable" | "misconfigured";
 
 const MAX_PARALLEL_DETAIL_READS = 3;
+const MAX_RPC_REQUESTS_PER_MINUTE = 24;
+const RPC_WINDOW_MS = 60_000;
+const MAX_IN_FLIGHT_RPC_REQUESTS = 2;
 const RATE_LIMIT_RETRY_DELAY_MS = 1_000;
 const MAX_RATE_LIMIT_RETRIES = 1;
 const READ_CACHE_TTL_MS = 5_000;
@@ -39,8 +42,25 @@ const MAX_READ_CACHE_ENTRIES = 300;
 const inflightReads = new Map<string, Promise<unknown>>();
 const readCache = new Map<string, { value: unknown; expiresAt: number }>();
 
+export type RpcReadPriority = "critical" | "interactive" | "background";
+
+type RpcQueueEntry = {
+  operation: () => Promise<unknown>;
+  priority: RpcReadPriority;
+  sequence: number;
+  resolve: (value: unknown) => void;
+  reject: (reason: unknown) => void;
+};
+
+const rpcQueue: RpcQueueEntry[] = [];
+const rpcRequestTimes: number[] = [];
+let rpcSequence = 0;
+let rpcInFlight = 0;
+let rpcPumpTimer: ReturnType<typeof setTimeout> | null = null;
+let nextRateLimitRetryAt = 0;
+
 function readKey(functionName: string, args: (string | number | bigint)[]): string {
-  return JSON.stringify([functionName, args.map((arg) => typeof arg === "bigint" ? `${arg}n` : arg)]);
+  return JSON.stringify([functionName, args.map((arg) => typeof arg === "bigint" ? String(arg) + "n" : arg)]);
 }
 
 function retryAfterMs(error: unknown): number | null {
@@ -67,39 +87,111 @@ function retryAfterMs(error: unknown): number | null {
   return null;
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+function priorityWeight(priority: RpcReadPriority): number {
+  return priority === "critical" ? 0 : priority === "interactive" ? 1 : 2;
 }
 
-let nextRateLimitRetryAt = 0;
-const RATE_LIMIT_RETRY_SPACING_MS = 250;
+function pruneRpcRequestTimes(now: number): void {
+  const cutoff = now - RPC_WINDOW_MS;
+  while (rpcRequestTimes.length > 0 && rpcRequestTimes[0] <= cutoff) rpcRequestTimes.shift();
+}
 
-async function waitForRateLimitRetry(error: unknown, retryNumber: number): Promise<void> {
-  const delay = retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS * (2 ** retryNumber);
+function budgetAvailableAt(now: number): number {
+  pruneRpcRequestTimes(now);
+  return rpcRequestTimes.length < MAX_RPC_REQUESTS_PER_MINUTE
+    ? now
+    : rpcRequestTimes[0] + RPC_WINDOW_MS + 1;
+}
+
+function scheduleRpcPump(delayMs: number): void {
+  if (rpcPumpTimer !== null) return;
+  rpcPumpTimer = setTimeout(() => {
+    rpcPumpTimer = null;
+    pumpRpcQueue();
+  }, Math.max(0, delayMs));
+}
+
+function registerRateLimitCooldown(error: unknown): void {
+  const delay = Math.max(RATE_LIMIT_RETRY_DELAY_MS, retryAfterMs(error) ?? RATE_LIMIT_RETRY_DELAY_MS);
+  nextRateLimitRetryAt = Math.max(nextRateLimitRetryAt, Date.now() + delay);
+}
+
+function pumpRpcQueue(): void {
+  if (rpcQueue.length === 0) return;
   const now = Date.now();
-  const retryAt = Math.max(now + delay, nextRateLimitRetryAt);
-  nextRateLimitRetryAt = retryAt + RATE_LIMIT_RETRY_SPACING_MS;
-  await wait(Math.max(0, retryAt - now));
+  pruneRpcRequestTimes(now);
+  const nextAllowedAt = Math.max(nextRateLimitRetryAt, budgetAvailableAt(now));
+  if (nextAllowedAt > now) {
+    scheduleRpcPump(nextAllowedAt - now);
+    return;
+  }
+  while (rpcInFlight < MAX_IN_FLIGHT_RPC_REQUESTS && rpcQueue.length > 0) {
+    const current = Date.now();
+    pruneRpcRequestTimes(current);
+    const availableAt = Math.max(nextRateLimitRetryAt, budgetAvailableAt(current));
+    if (availableAt > current) {
+      scheduleRpcPump(availableAt - current);
+      return;
+    }
+    rpcQueue.sort((left, right) => priorityWeight(left.priority) - priorityWeight(right.priority) || left.sequence - right.sequence);
+    const entry = rpcQueue.shift();
+    if (!entry) return;
+    rpcRequestTimes.push(current);
+    rpcInFlight += 1;
+    void Promise.resolve()
+      .then(entry.operation)
+      .then(entry.resolve, (error: unknown) => {
+        if (isRateLimitError(error)) registerRateLimitCooldown(error);
+        entry.reject(error);
+      })
+      .finally(() => {
+        rpcInFlight -= 1;
+        pumpRpcQueue();
+      });
+  }
+}
+
+export function getRpcSchedulerSnapshot(): {
+  requestsLastMinute: number;
+  queued: number;
+  inFlight: number;
+  cooldownUntil: number;
+  budget: number;
+} {
+  pruneRpcRequestTimes(Date.now());
+  return {
+    requestsLastMinute: rpcRequestTimes.length,
+    queued: rpcQueue.length,
+    inFlight: rpcInFlight,
+    cooldownUntil: nextRateLimitRetryAt,
+    budget: MAX_RPC_REQUESTS_PER_MINUTE,
+  };
 }
 
 export function rateLimitCooldownUntil(): number {
   return nextRateLimitRetryAt;
 }
 
-export async function runRateLimitedRead<T>(operation: () => Promise<T>): Promise<T> {
+function enqueueRpcRead<T>(operation: () => Promise<T>, priority: RpcReadPriority): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    rpcQueue.push({ operation: operation as () => Promise<unknown>, priority, sequence: rpcSequence++, resolve: resolve as (value: unknown) => void, reject });
+    pumpRpcQueue();
+  });
+}
+
+export async function runRateLimitedRead<T>(operation: () => Promise<T>, priority: RpcReadPriority = "background"): Promise<T> {
   let retries = 0;
   while (true) {
     try {
-      return await operation();
+      return await enqueueRpcRead(operation, priority);
     } catch (error) {
       if (retries >= MAX_RATE_LIMIT_RETRIES || !isRateLimitError(error)) throw error;
       retries += 1;
-      await waitForRateLimitRetry(error, retries);
     }
   }
 }
 
-async function readContractOnce(functionName: string, args: (string | number | bigint)[]): Promise<unknown> {
+async function readContractOnce(functionName: string, args: (string | number | bigint)[], priority: RpcReadPriority): Promise<unknown> {
   return runRateLimitedRead(async () => {
     const config = requireConfig();
     return getClient().readContract({
@@ -108,10 +200,10 @@ async function readContractOnce(functionName: string, args: (string | number | b
         args,
         transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
       });
-  });
+  }, priority);
 }
 
-export async function readContract(functionName: string, args: (string | number | bigint)[] = []): Promise<unknown> {
+export async function readContract(functionName: string, args: (string | number | bigint)[] = [], priority: RpcReadPriority = "background"): Promise<unknown> {
   const key = readKey(functionName, args);
   const cached = readCache.get(key);
   if (cached) {
@@ -120,7 +212,7 @@ export async function readContract(functionName: string, args: (string | number 
   }
   const existing = inflightReads.get(key);
   if (existing) return existing;
-  const request = readContractOnce(functionName, args);
+  const request = readContractOnce(functionName, args, priority);
   inflightReads.set(key, request);
   request.then(
     (value) => {
@@ -228,6 +320,32 @@ function readIdList(raw: unknown): string[] {
   return raw.map((item) => validateIdentifier(item, "proposal ID"));
 }
 
+export async function loadLandingSnapshot(walletAddress: string | null): Promise<MarketSnapshot> {
+  if (!configState.ok) throw new Error(configState.message);
+  const [rawConfig, rawAccounting, rawCount] = await Promise.all([
+    readContract("get_config", [], "background"),
+    readContract("get_accounting", [], "background"),
+    readContract("get_proposal_count", [], "background"),
+  ]);
+  const config = readConfig(rawConfig);
+  const accounting = readAccounting(rawAccounting);
+  const proposalCount = toBigInt(rawCount, "proposal count");
+  if (proposalCount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Contract returned an invalid proposal count.");
+  const numericCount = Number(proposalCount);
+  let proposalIds: string[] = [];
+  let proposals: Proposal[] = [];
+  if (numericCount > 0) {
+    try {
+      const latestIds = readIdList(await readContract("get_proposal_ids", [numericCount - 1, 1], "background"));
+      proposalIds = latestIds;
+      proposals = await mapWithConcurrency(latestIds, 1, async (id) => readProposal(await readContract("get_proposal", [id], "background")));
+    } catch {
+      // The landing proof remains useful when the optional featured record is unavailable.
+    }
+  }
+  return { config, accounting, proposalCount, proposalIds, proposals, walletCredit: null };
+}
+
 export async function loadMarketSnapshot(walletAddress: string | null): Promise<MarketSnapshot> {
   if (!configState.ok) throw new Error(configState.message);
   const [rawConfig, rawAccounting, rawCount] = await Promise.all([
@@ -260,13 +378,13 @@ export type WalletChallengeLoad = {
   failedProposalIds: string[];
 };
 
-export async function loadWalletChallenges(walletAddress: string, proposalIds: string[]): Promise<WalletChallengeLoad> {
+export async function loadWalletChallenges(walletAddress: string, proposalIds: string[], priority: RpcReadPriority = "background"): Promise<WalletChallengeLoad> {
   const canonicalWallet = walletAddress.toLowerCase();
   const canonicalProposalIds = proposalIds.map((proposalId) => validateIdentifier(proposalId, "proposal ID"));
   const results = await mapWithConcurrency(canonicalProposalIds, MAX_PARALLEL_DETAIL_READS, async (proposalId) => {
     try {
-      const challengeIds = readIdList(await readContract("get_proposal_challenge_ids", [proposalId]));
-      const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (challengeId) => readChallenge(await readContract("get_challenge", [challengeId])));
+      const challengeIds = readIdList(await readContract("get_proposal_challenge_ids", [proposalId], priority));
+      const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (challengeId) => readChallenge(await readContract("get_challenge", [challengeId], priority)));
       return { proposalId, challenges, failed: false };
     } catch {
       return { proposalId, challenges: [], failed: true };
@@ -279,16 +397,16 @@ export async function loadWalletChallenges(walletAddress: string, proposalIds: s
   };
 }
 
-export async function loadProposalDetail(proposalId: string, proposalHint?: Proposal): Promise<ProposalDetail> {
+export async function loadProposalDetail(proposalId: string, proposalHint?: Proposal, priority: RpcReadPriority = "interactive"): Promise<ProposalDetail> {
   const canonicalProposalId = validateIdentifier(proposalId, "proposal ID");
   const [rawProposal, rawChallengeIds] = await Promise.all([
-    proposalHint?.id === canonicalProposalId ? Promise.resolve(proposalHint) : readContract("get_proposal", [canonicalProposalId]),
-    readContract("get_proposal_challenge_ids", [canonicalProposalId]),
+    proposalHint?.id === canonicalProposalId ? Promise.resolve(proposalHint) : readContract("get_proposal", [canonicalProposalId], priority),
+    readContract("get_proposal_challenge_ids", [canonicalProposalId], priority),
   ]);
   const proposal = proposalHint && proposalHint.id === canonicalProposalId ? proposalHint : readProposal(rawProposal);
   const challengeIds = readIdList(rawChallengeIds);
-  const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (id) => readChallenge(await readContract("get_challenge", [id])));
-  const canExecute = proposal.status === "CLEAR" && await readContract("can_execute", [canonicalProposalId]) === true;
+  const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (id) => readChallenge(await readContract("get_challenge", [id], priority)));
+  const canExecute = proposal.status === "CLEAR" && await readContract("can_execute", [canonicalProposalId], priority) === true;
   return { proposal, challenges, canExecute };
 }
 
@@ -301,20 +419,20 @@ export type TargetedMarketUpdate = {
   walletCredit: bigint | null;
 };
 
-export async function loadTargetedProposal(proposalId: string, walletAddress: string | null): Promise<TargetedMarketUpdate> {
+export async function loadTargetedProposal(proposalId: string, walletAddress: string | null, priority: RpcReadPriority = "interactive"): Promise<TargetedMarketUpdate> {
   const canonicalProposalId = validateIdentifier(proposalId, "proposal ID");
   const [detail, rawCount, rawAccounting] = await Promise.all([
-    loadProposalDetail(canonicalProposalId),
-    readContract("get_proposal_count"),
-    readContract("get_accounting"),
+    loadProposalDetail(canonicalProposalId, undefined, priority),
+    readContract("get_proposal_count", [], priority),
+    readContract("get_accounting", [], priority),
   ]);
   const proposalCount = toBigInt(rawCount, "proposal count");
   if (proposalCount > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Contract returned an invalid proposal count.");
   const numericCount = Number(proposalCount);
   const proposalIdsOffset = Math.max(0, numericCount - 50);
   const [rawIds, rawCredit] = await Promise.all([
-    readContract("get_proposal_ids", [proposalIdsOffset, 50]),
-    walletAddress ? readContract("get_credit", [walletAddress]) : Promise.resolve(null),
+    readContract("get_proposal_ids", [proposalIdsOffset, 50], priority),
+    walletAddress ? readContract("get_credit", [walletAddress], priority) : Promise.resolve(null),
   ]);
   return {
     proposal: detail.proposal,
