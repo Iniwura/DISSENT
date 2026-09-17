@@ -50,7 +50,7 @@ export function BalanceLedgerV2() {
             <section className="dv2-balance-hero">
               <div>
                 <EditorialLabel>Settled credit</EditorialLabel>
-                <strong>{credit === null || credit === undefined ? "ºw^~)Þt" : formatWei(credit)}</strong>
+                <strong>{credit === null || credit === undefined ? "â€”" : formatWei(credit)}</strong>
                 <span>Reusable inside Dissent. Not wallet cash. {wallet.address}</span>
               </div>
               <div className="dv2-balance-lock">
@@ -81,7 +81,7 @@ export function BalanceLedgerV2() {
               <section className="dv2-ledger">
                 <div className="dv2-ledger-head"><EditorialLabel>Available outcomes</EditorialLabel><span>{String(outcomeCounts.length).padStart(2, "0")}</span></div>
                 {outcomeCounts.length === 0 ? (
-                  <div className="dv2-ledger-row is-muted"><span>ºw^~)Þt</span><strong>No recorded outcomes</strong><small>Your created reviews will appear here as the contract records them.</small></div>
+                  <div className="dv2-ledger-row is-muted"><span>â€”</span><strong>No recorded outcomes</strong><small>Your created reviews will appear here as the contract records them.</small></div>
                 ) : outcomeCounts.map(({ status, count }, index) => (
                   <div className="dv2-ledger-row" key={status}><span>{String(index + 1).padStart(2, "0")}</span><strong>{status}</strong><small>{count} review{count === 1 ? "" : "s"} currently recorded with this outcome.</small></div>
                 ))}
