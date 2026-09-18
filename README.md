@@ -202,6 +202,13 @@ challenge IDs, evidence URLs, statuses, hashes, and verdict rules, but
 consensus reduces rather than mathematically eliminates semantic prompt
 injection risk.
 
+## Known frontend limitation
+
+Studio Next RPC rate limits can temporarily delay review and profile loading or
+transaction confirmation updates. Recurring HTTP 429 errors remain under
+investigation. A read failure does not mean a transaction failed; verify its
+status in the explorer before resubmitting.
+
 ## Repository map
 
 ```text
@@ -255,6 +262,15 @@ Studio Next and explicit wallet approval. Settled Dissent credits are reusable
 for supported Dissent funding, but are not wallet-withdrawable in this RC.
 
 ## Reviewer verification
+
+Studio Next RPC rate limits can temporarily delay review and profile loading or
+transaction confirmation updates. Recurring HTTP 429 errors remain under
+investigation. A read failure does not mean a transaction failed; verify its
+status in the explorer before resubmitting.
+
+When rate-limited, allow the cooldown to finish before retrying. Avoid repeated
+refreshes or duplicate submissions. A temporary unavailable-data notice is not
+proof that a review is missing or that a transaction failed.
 
 From the repository root, the following commands match the checked-in scripts
 and installed CLI syntax:
