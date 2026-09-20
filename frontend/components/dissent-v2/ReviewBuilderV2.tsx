@@ -297,7 +297,7 @@ function ChallengeCountdown({ deadline, now }: { deadline: bigint; now: bigint }
 }
 function padCountdown(value: bigint) { return value.toString().padStart(2, '0'); }
 
-function ChallengeDialogV2({ proposal }: { proposal: Proposal }) {
+function ChallengeDialogV2({ proposal, onConfirmed }: { proposal: Proposal; onConfirmed?: () => void }) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -324,16 +324,26 @@ function ChallengeDialogV2({ proposal }: { proposal: Proposal }) {
       if (previous?.isConnected) previous.focus();
     };
   }, [open]);
-  const close = () => setOpen(false);
-  return <><button ref={triggerRef} className='dv2-button dv2-button-red dv2-challenge-trigger' type='button' onClick={() => setOpen(true)} aria-haspopup='dialog' aria-expanded={open}>Challenge this review <ArrowRight size={15} /></button><div className='dv2-dialog-backdrop' hidden={!open} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><div ref={dialogRef} className='dv2-dialog' role='dialog' aria-modal='true' aria-labelledby={titleId} onMouseDown={event => event.stopPropagation()}><div className='dv2-dialog-head'><div><EditorialLabel>Material objection</EditorialLabel><h2 id={titleId}>Challenge this review.</h2></div><button ref={closeRef} className='dv2-dialog-close' type='button' onClick={close} aria-label='Close challenge form'><X size={17} /></button></div><ChallengeFormV2 proposal={proposal} lockAfterConfirmation={false} /></div></div></>;
+  const close = useCallback(() => setOpen(false), []);
+  const handleConfirmed = useCallback(() => {
+    close();
+    onConfirmed?.();
+  }, [close, onConfirmed]);
+  return <><button ref={triggerRef} className='dv2-button dv2-button-red dv2-challenge-trigger' type='button' onClick={() => setOpen(true)} aria-haspopup='dialog' aria-expanded={open}>Challenge this review <ArrowRight size={15} /></button><div className='dv2-dialog-backdrop' hidden={!open} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><div ref={dialogRef} className='dv2-dialog' role='dialog' aria-modal='true' aria-labelledby={titleId} onMouseDown={event => event.stopPropagation()}><div className='dv2-dialog-head'><div><EditorialLabel>Material objection</EditorialLabel><h2 id={titleId}>Challenge this review.</h2></div><button ref={closeRef} className='dv2-dialog-close' type='button' onClick={close} aria-label='Close challenge form'><X size={17} /></button></div><ChallengeFormV2 proposal={proposal} lockAfterConfirmation={false} onConfirmed={handleConfirmed} /></div></div></>;
 }
-export function ChallengeFormV2({ proposal, lockAfterConfirmation = true }: { proposal: Proposal; lockAfterConfirmation?: boolean }) {
+export function ChallengeFormV2({ proposal, lockAfterConfirmation = true, onConfirmed }: { proposal: Proposal; lockAfterConfirmation?: boolean; onConfirmed?: () => void }) {
   const dissent = useDissent();
   const { snapshot, wallet } = dissent;
   const { progress, submit, active, transactionLocked } = useV2Write(undefined, { lockAfterConfirmation });
   const [values, setValues] = useState({ id: proposal.id + '-objection-' + (proposal.challengeCount + 1n).toString(), objection: '', evidence: '', external: '0.1', credit: '0', error: '' });
   const minimumStake = snapshot?.config.minimumStake ?? 0n;
   const availability = writeAvailability(wallet);
+  const handledConfirmedHashRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (progress.phase !== 'confirmed' || !progress.hash || handledConfirmedHashRef.current === progress.hash) return;
+    handledConfirmedHashRef.current = progress.hash;
+    onConfirmed?.();
+  }, [onConfirmed, progress.hash, progress.phase]);
   const setValue = (key: keyof typeof values, value: string) => setValues(current => ({ ...current, [key]: value, error: '' }));
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -362,12 +372,18 @@ export function SimpleWriteButtonV2({ functionName, proposalId, label, note, loc
 }
 
 export function ProposalActionsV2({ detail }: { detail: ProposalDetail }) {
-  const { proposal } = detail;
+  const { proposal, challenges } = detail;
   const { snapshot, wallet } = useDissent();
   const [now, setNow] = useState(() => BigInt(Math.floor(Date.now() / 1000)));
+  const [confirmedChallengeWallet, setConfirmedChallengeWallet] = useState<string | null>(null);
   useEffect(() => { const timer = window.setInterval(() => setNow(BigInt(Math.floor(Date.now() / 1000))), 1000); return () => window.clearInterval(timer); }, []);
-  const proposer = Boolean(wallet.address) && wallet.address?.toLowerCase() === proposal.proposer.toLowerCase();
+  useEffect(() => { setConfirmedChallengeWallet(null); }, [proposal.id, wallet.address]);
+  const walletAddress = wallet.address?.toLowerCase() ?? null;
+  const proposer = Boolean(walletAddress) && walletAddress === proposal.proposer.toLowerCase();
+  const alreadyChallenged = Boolean(walletAddress && (confirmedChallengeWallet === walletAddress || challenges.some(challenge => challenge.challenger.toLowerCase() === walletAddress)));
+  const maximumChallenges = snapshot?.config.maximumChallenges ?? 5n;
+  const challengeLimitReached = proposal.challengeCount >= maximumChallenges;
   const afterDeadline = now >= proposal.challengeDeadline;
   const recovery = now >= proposal.challengeDeadline + (snapshot?.config.cancellationGraceSeconds ?? 604800n);
-  return <section className='dv2-action-rail'><EditorialLabel>Permitted action</EditorialLabel><h2>What happens next?</h2><ChallengeCountdown deadline={proposal.challengeDeadline} now={now} />{proposal.status === 'OPEN' && !afterDeadline && !proposer && <ChallengeDialogV2 proposal={proposal} />}{proposal.status === 'OPEN' && !afterDeadline && proposer && <p className='dv2-muted'>The proposer cannot challenge its own review.</p>}{proposal.status === 'OPEN' && afterDeadline && <SimpleWriteButtonV2 functionName='adjudicate' proposalId={proposal.id} label='Adjudicate review' note='Permissionless after the challenge deadline; validator consensus decides the outcome.' lockAfterConfirmation={false} />}{proposal.status === 'OPEN' && recovery && <SimpleWriteButtonV2 functionName='cancel' proposalId={proposal.id} label='Recover unresolved escrow' note='Permissionless recovery after the configured grace period; no model or web execution is used.' lockAfterConfirmation={false} />}{proposal.status === 'REVISE' && proposer && !proposal.supersededBy && <details className='dv2-disclosure'><summary>Submit a revision <ArrowRight size={15} /></summary><ReviseFormV2 parent={proposal} /></details>}{proposal.status === 'REVISE' && !proposer && !proposal.supersededBy && <p className='dv2-muted'>Only the original proposer can create the direct replacement.</p>}{proposal.status === 'CLEAR' && detail.canExecute && proposer && <SimpleWriteButtonV2 functionName='execute' proposalId={proposal.id} label='Execute review gate' note={'Proposer-only. The outstanding bond becomes settled credit for ' + proposal.executionRecipient + '.'} lockAfterConfirmation={false} />}{proposal.status === 'CLEAR' && detail.canExecute && !proposer && <p className='dv2-muted'>Only the proposer can consume this execution gate.</p>}{['BLOCK', 'CANCELLED', 'EXECUTED'].includes(proposal.status) && <p className='dv2-terminal'><ShieldCheck size={15} />Terminal state. Replay is rejected by the contract.</p>}</section>;
+  return <section className='dv2-action-rail'><EditorialLabel>Permitted action</EditorialLabel><h2>What happens next?</h2><ChallengeCountdown deadline={proposal.challengeDeadline} now={now} />{proposal.status === 'OPEN' && !afterDeadline && !proposer && alreadyChallenged && <button className='dv2-button dv2-button-red dv2-challenge-trigger' type='button' disabled>Challenge already submitted <Check size={15} /></button>}{proposal.status === 'OPEN' && !afterDeadline && !proposer && !alreadyChallenged && challengeLimitReached && <button className='dv2-button dv2-button-red dv2-challenge-trigger' type='button' disabled>Challenge limit reached <LockKeyhole size={15} /></button>}{proposal.status === 'OPEN' && !afterDeadline && !proposer && !alreadyChallenged && !challengeLimitReached && <ChallengeDialogV2 proposal={proposal} onConfirmed={() => setConfirmedChallengeWallet(walletAddress)} />}{proposal.status === 'OPEN' && !afterDeadline && proposer && <p className='dv2-muted'>The proposer cannot challenge its own review.</p>}{proposal.status === 'OPEN' && afterDeadline && <SimpleWriteButtonV2 functionName='adjudicate' proposalId={proposal.id} label='Adjudicate review' note='Permissionless after the challenge deadline; validator consensus decides the outcome.' lockAfterConfirmation={false} />}{proposal.status === 'OPEN' && recovery && <SimpleWriteButtonV2 functionName='cancel' proposalId={proposal.id} label='Recover unresolved escrow' note='Permissionless recovery after the configured grace period; no model or web execution is used.' lockAfterConfirmation={false} />}{proposal.status === 'REVISE' && proposer && !proposal.supersededBy && <details className='dv2-disclosure'><summary>Submit a revision <ArrowRight size={15} /></summary><ReviseFormV2 parent={proposal} /></details>}{proposal.status === 'REVISE' && !proposer && !proposal.supersededBy && <p className='dv2-muted'>Only the original proposer can create the direct replacement.</p>}{proposal.status === 'CLEAR' && detail.canExecute && proposer && <SimpleWriteButtonV2 functionName='execute' proposalId={proposal.id} label='Execute review gate' note={'Proposer-only. The outstanding bond becomes settled credit for ' + proposal.executionRecipient + '.'} lockAfterConfirmation={false} />}{proposal.status === 'CLEAR' && detail.canExecute && !proposer && <p className='dv2-muted'>Only the proposer can consume this execution gate.</p>}{['BLOCK', 'CANCELLED', 'EXECUTED'].includes(proposal.status) && <p className='dv2-terminal'><ShieldCheck size={15} />Terminal state. Replay is rejected by the contract.</p>}</section>;
 }
