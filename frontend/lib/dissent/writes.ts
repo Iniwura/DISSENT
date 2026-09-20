@@ -159,7 +159,6 @@ async function readPendingTransaction(pending: PendingWrite): Promise<GenLayerTr
   const key = pending.hash.toLowerCase();
   const existing = pendingTransactionReads.get(key);
   if (existing) return existing;
-  const config = requireConfig();
   const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: publicReadEndpoint() }).getTransaction({ hash: pending.hash }), "critical")
     .finally(() => {
       if (pendingTransactionReads.get(key) === request) pendingTransactionReads.delete(key);
@@ -454,6 +453,7 @@ export async function submitContractWrite(
       proposalId: proposalIdFor(request.functionName, request.args) ?? "",
       secondaryId: secondaryIdFor(request.functionName, request.args),
       createdAt: 0,
+      walletAddress: request.walletAddress.toLowerCase(),
     });
     onProgress({ phase: "confirmed", hash, error: null });
     return { hash, receipt, confirmed: true };
