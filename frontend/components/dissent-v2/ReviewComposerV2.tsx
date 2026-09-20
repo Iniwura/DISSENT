@@ -69,8 +69,16 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
   }, [notifyConfirmed, refreshProposal]);
 
   useEffect(() => {
-    const pending = getPendingWrite();
-    if (!pending) return;
+    watchAbortRef.current?.abort();
+    watchingHashRef.current = null;
+    watchAbortRef.current = null;
+
+    const pending = getPendingWrite(wallet.address);
+    if (!pending) {
+      setProgress({ phase: "idle", hash: null, error: null });
+      return;
+    }
+
     setProgress({ phase: "confirmation_pending", hash: pending.hash, error: PENDING_CONFIRMATION });
     startWatcher(pending);
     return () => {
@@ -80,7 +88,7 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
         watchAbortRef.current = null;
       }
     };
-  }, [startWatcher]);
+  }, [startWatcher, wallet.address]);
   const active = !["idle", "failed", "confirmed", "succeeded"].includes(progress.phase);
   const transactionLocked = active || (lockAfterConfirmation && progress.phase === "confirmed");
   const submit = useCallback(async (request: WriteRequest) => {
@@ -102,6 +110,7 @@ function useV2Write(onConfirmed?: ConfirmedWriteHandler, options?: V2WriteOption
           proposalId,
           secondaryId: request.functionName === "challenge" && typeof request.args[1] === "string" ? request.args[1] : null,
           createdAt: Date.now(),
+          walletAddress: wallet.address.toLowerCase(),
         });
       }
       return result;

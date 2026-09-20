@@ -2,7 +2,7 @@ import { createTransactionKit } from "@genlayer/transaction-kit";
 import { createClient } from "genlayer-js";
 import { transactionsStatusNumberToName, executionResultNumberToName, type CalldataEncodable, type GenLayerTransaction, type TransactionHash } from "genlayer-js/types";
 import { configState, requireConfig } from "./config";
-import { invalidateReadCache, readContract, runRateLimitedRead } from "./data";
+import { invalidateReadCache, publicReadEndpoint, readContract, runRateLimitedRead } from "./data";
 import { studioNext } from "./network";
 import { readWalletChainId } from "./wallet";
 import type { InjectedProvider } from "./wallet";
@@ -35,6 +35,7 @@ export type PendingWrite = {
   proposalId: string;
   secondaryId: string | null;
   createdAt: number;
+  walletAddress: string;
 };
 
 export type PendingReconciliation =
@@ -47,7 +48,13 @@ export type PendingWatchUpdate = {
   hash: TransactionHash;
 };
 
-const PENDING_WRITE_STORAGE_KEY = "dissent-pending-write-v1";
+const LEGACY_PENDING_WRITE_STORAGE_KEY = "dissent-pending-write-v1";
+const PENDING_WRITE_STORAGE_PREFIX = "dissent-pending-write-v2:";
+const PENDING_WRITE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+function pendingWriteStorageKey(walletAddress: string): string {
+  return PENDING_WRITE_STORAGE_PREFIX + walletAddress.toLowerCase();
+}
 
 type ClientProvider = NonNullable<NonNullable<Parameters<typeof createClient>[0]>["provider"]>;
 
@@ -66,24 +73,54 @@ function secondaryIdFor(functionName: string, args: CalldataEncodable[]): string
 function savePendingWrite(request: DissentWriteRequest, hash: TransactionHash): void {
   const proposalId = proposalIdFor(request.functionName, request.args);
   if (!proposalId || typeof window === "undefined") return;
+  const walletAddress = request.walletAddress.toLowerCase();
   const pending: PendingWrite = {
     hash,
     functionName: request.functionName,
     proposalId,
     secondaryId: secondaryIdFor(request.functionName, request.args),
     createdAt: Date.now(),
+    walletAddress,
   };
-  try { window.localStorage.setItem(PENDING_WRITE_STORAGE_KEY, JSON.stringify(pending)); } catch { /* Storage is optional. */ }
+  try {
+    window.localStorage.removeItem(LEGACY_PENDING_WRITE_STORAGE_KEY);
+    window.localStorage.setItem(pendingWriteStorageKey(walletAddress), JSON.stringify(pending));
+  } catch { /* Storage is optional. */ }
 }
 
-export function getPendingWrite(): PendingWrite | null {
-  if (typeof window === "undefined") return null;
+export function getPendingWrite(walletAddress: string | null | undefined): PendingWrite | null {
+  if (typeof window === "undefined" || !walletAddress) return null;
+  const canonicalWallet = walletAddress.toLowerCase();
   try {
-    const raw = window.localStorage.getItem(PENDING_WRITE_STORAGE_KEY);
+    // v1 was global across every connected wallet and could lock unrelated accounts.
+    window.localStorage.removeItem(LEGACY_PENDING_WRITE_STORAGE_KEY);
+    const key = pendingWriteStorageKey(canonicalWallet);
+    const raw = window.localStorage.getItem(key);
     if (!raw) return null;
     const value = JSON.parse(raw) as Partial<PendingWrite>;
-    if (typeof value.hash !== "string" || !/^0x[0-9a-fA-F]+$/.test(value.hash) || typeof value.functionName !== "string" || typeof value.proposalId !== "string") return null;
-    return { hash: value.hash as TransactionHash, functionName: value.functionName, proposalId: value.proposalId, secondaryId: typeof value.secondaryId === "string" ? value.secondaryId : null, createdAt: typeof value.createdAt === "number" ? value.createdAt : 0 };
+    if (
+      typeof value.hash !== "string"
+      || !/^0x[0-9a-fA-F]+$/.test(value.hash)
+      || typeof value.functionName !== "string"
+      || typeof value.proposalId !== "string"
+      || typeof value.walletAddress !== "string"
+    ) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    const createdAt = typeof value.createdAt === "number" ? value.createdAt : 0;
+    if (value.walletAddress.toLowerCase() !== canonicalWallet || createdAt <= 0 || Date.now() - createdAt > PENDING_WRITE_MAX_AGE_MS) {
+      window.localStorage.removeItem(key);
+      return null;
+    }
+    return {
+      hash: value.hash as TransactionHash,
+      functionName: value.functionName,
+      proposalId: value.proposalId,
+      secondaryId: typeof value.secondaryId === "string" ? value.secondaryId : null,
+      createdAt,
+      walletAddress: canonicalWallet,
+    };
   } catch { return null; }
 }
 
@@ -91,14 +128,16 @@ function samePendingWrite(left: PendingWrite, right: PendingWrite): boolean {
   return left.hash.toLowerCase() === right.hash.toLowerCase()
     && left.functionName === right.functionName
     && left.proposalId === right.proposalId
-    && left.secondaryId === right.secondaryId;
+    && left.secondaryId === right.secondaryId
+    && left.walletAddress.toLowerCase() === right.walletAddress.toLowerCase();
 }
 
 function clearPendingWrite(expected: PendingWrite): void {
   if (typeof window === "undefined") return;
   try {
-    const current = getPendingWrite();
-    if (current && samePendingWrite(current, expected)) window.localStorage.removeItem(PENDING_WRITE_STORAGE_KEY);
+    const key = pendingWriteStorageKey(expected.walletAddress);
+    const current = getPendingWrite(expected.walletAddress);
+    if (current && samePendingWrite(current, expected)) window.localStorage.removeItem(key);
   } catch { /* Storage is optional. */ }
 }
 
@@ -121,7 +160,7 @@ async function readPendingTransaction(pending: PendingWrite): Promise<GenLayerTr
   const existing = pendingTransactionReads.get(key);
   if (existing) return existing;
   const config = requireConfig();
-  const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: config.rpcUrl }).getTransaction({ hash: pending.hash }), "critical")
+  const request = runRateLimitedRead(() => createClient({ chain: studioNext, endpoint: publicReadEndpoint() }).getTransaction({ hash: pending.hash }), "critical")
     .finally(() => {
       if (pendingTransactionReads.get(key) === request) pendingTransactionReads.delete(key);
     });
@@ -371,9 +410,10 @@ export async function submitContractWrite(
     savePendingWrite(request, hash);
     onProgress({ phase: "submitted", hash, error: null });
 
+    const confirmationClient = createClient({ chain: studioNext, endpoint: publicReadEndpoint() });
     let decision: GenLayerTransaction | null = null;
     try {
-      decision = await client.waitForDecision({ hash, fullTransaction: false });
+      decision = await confirmationClient.waitForDecision({ hash, fullTransaction: false });
     } catch {
       // A receipt polling failure after broadcast is not proof that the write failed.
     }
@@ -384,7 +424,7 @@ export async function submitContractWrite(
     }
 
     onProgress({ phase: "finalizing", hash, error: null });
-    const receipt = await client.waitForFinalization({ hash, fullTransaction: false });
+    const receipt = await confirmationClient.waitForFinalization({ hash, fullTransaction: false });
     const finalStatus = statusName(receipt);
     if (finalStatus !== "ACCEPTED" && finalStatus !== "FINALIZED") {
       throw new Error("The submitted transaction has not reached an accepted or finalized state.");
@@ -396,6 +436,7 @@ export async function submitContractWrite(
         proposalId: proposalIdFor(request.functionName, request.args) ?? "",
         secondaryId: secondaryIdFor(request.functionName, request.args),
         createdAt: 0,
+        walletAddress: request.walletAddress.toLowerCase(),
       });
       onProgress({ phase: "failed", hash, error: FAILED_AFTER_BROADCAST });
       throw new Error(FAILED_AFTER_BROADCAST);
@@ -424,6 +465,7 @@ export async function submitContractWrite(
       proposalId: proposalIdFor(request.functionName, request.args) ?? "",
       secondaryId: secondaryIdFor(request.functionName, request.args),
       createdAt: Date.now(),
+      walletAddress: request.walletAddress.toLowerCase(),
     };
     const reconciled = await reconcilePendingWrite(pending);
     if (reconciled?.status === "confirmed") {

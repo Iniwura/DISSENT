@@ -23,7 +23,7 @@ export const SDK_VERSION = "genlayer-js 2.0.0-rc.1 - transaction kit 0.1.0-rc.2"
 
 let client: ReturnType<typeof createClient> | null = null;
 
-function publicReadEndpoint(): string {
+export function publicReadEndpoint(): string {
   const config = requireConfig();
   if (typeof window === "undefined") return config.rpcUrl;
   return new URL("/api/genlayer", window.location.origin).toString();
