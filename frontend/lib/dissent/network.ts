@@ -2,16 +2,18 @@ import { studioDevnet } from "genlayer-js/chains";
 import type { GenLayerChain } from "genlayer-js/types";
 import { defineChain } from "viem";
 
-// Studio Next and Studio Dev advertise chain 61997, so the endpoint is part
-// of the network identity and must remain explicit in every public read/write.
-export const STUDIO_NEXT_RPC_URL = "https://studio-next.genlayer.com/api";
+// Studio Next is a browser alias for the Studio development preview. Programmatic
+// clients must use the canonical Studio-dev RPC even though both advertise 61997.
+export const STUDIO_NEXT_RPC_URL = "https://studio-dev.genlayer.com/api";
+export const STUDIO_NEXT_RPC_ALIAS_URL = "https://studio-next.genlayer.com/api";
 export const STUDIO_NEXT_CHAIN_ID = 61997;
 export const STUDIO_NEXT_CHAIN_ID_HEX = "0xf22d";
 export const STUDIO_NEXT_NETWORK = "studio-next";
 export const STUDIO_NEXT_EXPLORER_URL = "https://explorer-studio-dev.genlayer.com/";
 
-// genlayer-js@2.0.0-rc.1 does not ship a studioNext constant. Clone the
-// official Studio chain metadata and replace only the endpoint and labels.
+// genlayer-js@2.0.0-rc.1 ships the matching Studio-dev chain metadata. Keep
+// Dissent's product-facing Studio Next label, but bind all SDK reads/writes to
+// the canonical Studio-dev endpoint.
 export const studioNext = {
   ...studioDevnet,
   id: STUDIO_NEXT_CHAIN_ID,
