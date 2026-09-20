@@ -1,4 +1,4 @@
-import { STUDIO_NEXT_NETWORK, STUDIO_NEXT_RPC_URL } from "./network";
+import { STUDIO_NEXT_NETWORK, STUDIO_NEXT_RPC_ALIAS_URL, STUDIO_NEXT_RPC_URL } from "./network";
 
 export type DissentConfig = {
   rpcUrl: string;
@@ -24,6 +24,12 @@ function publicValue(name: string, fallback: string): string {
   return value === undefined ? fallback : value.trim();
 }
 
+function normalizeRpcUrl(value: string): string {
+  const normalized = value.replace(/\/+$/, "");
+  if (normalized === STUDIO_NEXT_RPC_ALIAS_URL) return STUDIO_NEXT_RPC_URL;
+  return normalized;
+}
+
 function parseChainId(value: string): number {
   if (!/^\d+$/.test(value)) throw new Error("NEXT_PUBLIC_GENLAYER_CHAIN_ID must be numeric.");
   const parsed = BigInt(value);
@@ -35,7 +41,7 @@ function parseChainId(value: string): number {
 
 function parseConfig(): ConfigState {
   try {
-    const rpcUrl = publicValue("NEXT_PUBLIC_GENLAYER_RPC_URL", DEFAULT_RPC_URL);
+    const rpcUrl = normalizeRpcUrl(publicValue("NEXT_PUBLIC_GENLAYER_RPC_URL", DEFAULT_RPC_URL));
     const chainId = parseChainId(publicValue("NEXT_PUBLIC_GENLAYER_CHAIN_ID", DEFAULT_CHAIN_ID));
     const network = publicValue("NEXT_PUBLIC_GENLAYER_NETWORK", DEFAULT_NETWORK);
     const contractAddress = publicValue(
@@ -48,7 +54,7 @@ function parseConfig(): ConfigState {
     }
     if (chainId !== 61997) throw new Error("This release candidate requires Studio Next chain 61997.");
     if (network !== STUDIO_NEXT_NETWORK) throw new Error("This release candidate requires the Studio Next network label.");
-    if (rpcUrl !== STUDIO_NEXT_RPC_URL) throw new Error("This release candidate requires the configured Studio Next RPC.");
+    if (rpcUrl !== STUDIO_NEXT_RPC_URL) throw new Error("This release candidate requires the canonical Studio-dev RPC.");
     if (!/^0x[0-9a-fA-F]{40}$/.test(contractAddress)) {
       throw new Error("NEXT_PUBLIC_DISSENT_CONTRACT_ADDRESS must be a 20-byte address.");
     }
