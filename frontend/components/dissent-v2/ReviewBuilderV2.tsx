@@ -331,7 +331,7 @@ export function ChallengeFormV2({ proposal, lockAfterConfirmation = true }: { pr
   const dissent = useDissent();
   const { snapshot, wallet } = dissent;
   const { progress, submit, active, transactionLocked } = useV2Write(undefined, { lockAfterConfirmation });
-  const [values, setValues] = useState({ id: proposal.id + '-objection-1', objection: '', evidence: '', external: '0.1', credit: '0', error: '' });
+  const [values, setValues] = useState({ id: proposal.id + '-objection-' + (proposal.challengeCount + 1n).toString(), objection: '', evidence: '', external: '0.1', credit: '0', error: '' });
   const minimumStake = snapshot?.config.minimumStake ?? 0n;
   const availability = writeAvailability(wallet);
   const setValue = (key: keyof typeof values, value: string) => setValues(current => ({ ...current, [key]: value, error: '' }));
