@@ -1,4 +1,7 @@
-import { STUDIO_NEXT_CHAIN_ID, STUDIO_NEXT_RPC_URL } from "@/lib/dissent/network";
+import { createClient } from "genlayer-js";
+import { TransactionHashVariant } from "genlayer-js/types";
+import { requireConfig } from "@/lib/dissent/config";
+import { studioNext, STUDIO_NEXT_CHAIN_ID, STUDIO_NEXT_RPC_URL } from "@/lib/dissent/network";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -64,13 +67,36 @@ export async function GET(): Promise<Response> {
   } catch {
     rpcOk = false;
   }
+
+  let contractReadable = false;
+  let proposalCount: string | null = null;
+  if (rpcOk) {
+    try {
+      const config = requireConfig();
+      const rpcClient = createClient({ chain: studioNext, endpoint: STUDIO_NEXT_RPC_URL });
+      const count = await rpcClient.readContract({
+        address: config.contractAddress,
+        functionName: "get_proposal_count",
+        args: [],
+        transactionHashVariant: TransactionHashVariant.LATEST_FINAL,
+      });
+      proposalCount = typeof count === "bigint" ? count.toString() : String(count);
+      contractReadable = true;
+    } catch {
+      contractReadable = false;
+    }
+  }
+
+  const ok = rpcOk && contractReadable;
   return Response.json(
     {
-      ok: rpcOk,
+      ok,
       upstreamStatus: upstream.status,
       chainId,
       expectedChainId: STUDIO_NEXT_CHAIN_ID,
+      contractReadable,
+      proposalCount,
     },
-    { status: rpcOk ? 200 : 503, headers: { "cache-control": "no-store" } },
+    { status: ok ? 200 : 503, headers: { "cache-control": "no-store" } },
   );
 }
