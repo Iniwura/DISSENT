@@ -7,7 +7,7 @@
   "contractAddress": null,
   "deploymentTransaction": null,
   "sourceCommit": "e674d6efb57fd3bdc13c17d9fc8c7f23c1b0c119",
-  "sourceSha256": "d3f3108c8016f7d06776c3d98a3aa8df694f267784d2d4f42bc916068bb3969a",
+  "sourceSha256": "1075533a8b413ae7a94b80d9aa2cb7139e83c1733519fc56c17e90f14ae6581a",
   "sourceFile": "contracts/dissent.py",
   "constructor": {
     "minimumBounty": "300",

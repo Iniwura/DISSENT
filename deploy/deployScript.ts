@@ -1,20 +1,25 @@
+import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import path from "path";
-import {
+import { pathToFileURL } from "url";
+import type {
   TransactionHash,
-  TransactionStatus,
   GenLayerClient,
   DecodedDeployData,
   GenLayerChain,
 } from "genlayer-js/types";
-const STUDIO_NEXT_RPC_URL = "https://studio-next.genlayer.com/api";
-const STUDIO_NEXT_CHAIN_ID = 61997;
 
 type FeeProfileEntry = {
   leaderTimeunitsAllocation: string;
   validatorTimeunitsAllocation: string;
-  totalMessageFees?: string;
-  rotationsPerRound: string;
+  appealRounds: string;
+  executionBudgetPerRound: string;
+  executionConsumed: string;
+  totalMessageFees: string;
+  rotations: string[];
+  maxPriceGenPerTimeUnit: string;
+  storageFeeMaxGasPrice: string;
+  receiptFeeMaxGasPrice: string;
 };
 
 function loadDeploymentFeeOptions() {
@@ -25,73 +30,107 @@ function loadDeploymentFeeOptions() {
   if (!deploy) {
     throw new Error("fee-profile.json does not contain a measured deploy entry.");
   }
-
-  const rotationsPerRound = BigInt(deploy.rotationsPerRound);
-  if (rotationsPerRound < 1n) {
-    throw new Error("fee-profile.json deploy entry has invalid rotationsPerRound.");
+  if (deploy.appealRounds !== "0" || deploy.rotations.length !== 1) {
+    throw new Error("Deployment fee profile must explicitly select zero appeal rounds and one rotation.");
   }
-
-  // The installed genlayer-js FeeEstimateOptions accepts these measured
-  // distribution fields. executionBudgetPerRound remains in the profile as
-  // measured metadata but is not a supported top-level estimate option.
   return {
     leaderTimeunitsAllocation: BigInt(deploy.leaderTimeunitsAllocation),
     validatorTimeunitsAllocation: BigInt(deploy.validatorTimeunitsAllocation),
-    totalMessageFees: BigInt(deploy.totalMessageFees ?? "0"),
-    rotations: [rotationsPerRound],
+    appealRounds: BigInt(deploy.appealRounds),
+    executionBudgetPerRound: BigInt(deploy.executionBudgetPerRound),
+    executionConsumed: BigInt(deploy.executionConsumed),
+    totalMessageFees: BigInt(deploy.totalMessageFees),
+    rotations: deploy.rotations.map((value) => BigInt(value)),
+    maxPriceGenPerTimeUnit: BigInt(deploy.maxPriceGenPerTimeUnit),
+    storageFeeMaxGasPrice: BigInt(deploy.storageFeeMaxGasPrice),
+    receiptFeeMaxGasPrice: BigInt(deploy.receiptFeeMaxGasPrice),
   };
 }
 
+function sourceHash(code: Uint8Array) {
+  return createHash("sha256").update(code).digest("hex");
+}
+
+function clientRpcUrl(client: GenLayerClient<any>) {
+  return (client.chain as GenLayerChain).rpcUrls.default.http[0];
+}
+
 export default async function main(client: GenLayerClient<any>) {
+  const {
+    AUTHORIZED_DEPLOYMENT,
+    assertAuthorizedDeploymentEnvelope,
+  } = await import(
+    pathToFileURL(path.resolve(process.cwd(), "deploy/deploymentGuard.mjs")).href
+  );
   const filePath = path.resolve(process.cwd(), "contracts/dissent.py");
+  const contractCode = new Uint8Array(readFileSync(filePath));
+  const constructorArgs = [...AUTHORIZED_DEPLOYMENT.constructorArgs];
 
-  try {
-    const contractCode = new Uint8Array(readFileSync(filePath));
-
-    await client.initializeConsensusSmartContract();
-
-    if ((client.chain as GenLayerChain).id !== STUDIO_NEXT_CHAIN_ID) {
-      throw new Error("Deployment client must target Studio Next chain " + STUDIO_NEXT_CHAIN_ID + " through " + STUDIO_NEXT_RPC_URL + ".");
-    }
-
-    const feeEstimate = await client.estimateTransactionFees(loadDeploymentFeeOptions());
-    if (feeEstimate.feeValue <= 0n) {
-      throw new Error("Studio Next returned no positive deployment feeValue estimate.");
-    }
-
-    const deployTransaction = await client.deployContract({
-      code: contractCode,
-      // Constructor ABI remains (minimum_bounty, minimum_stake, minimum_execution_bond).
-      fees: { distribution: feeEstimate.distribution, feeValue: feeEstimate.feeValue },
-      args: [300, 100, 1_000],
-    });
-
-    const receipt = await client.waitForTransactionReceipt({
-      hash: deployTransaction as TransactionHash,
-      status: TransactionStatus.FINALIZED,
-      retries: 200,
-    });
-
-    const lifecycleSucceeded =
-      receipt.statusName === TransactionStatus.ACCEPTED ||
-      receipt.statusName === TransactionStatus.FINALIZED ||
-      receipt.status === TransactionStatus.ACCEPTED ||
-      receipt.status === TransactionStatus.FINALIZED ||
-      receipt.status === 5 ||
-      receipt.status === 7;
-    if (!lifecycleSucceeded || receipt.txExecutionResultName !== "FINISHED_WITH_RETURN") {
-      throw new Error(`Deployment failed. Receipt: ${JSON.stringify(receipt)}`);
-    }
-
-    const deployedContractAddress =
-      (receipt.txDataDecoded as DecodedDeployData)?.contractAddress;
-
-    if (!deployedContractAddress) {
-      throw new Error("Deployment succeeded without a contract address");
-    }
-
-    console.log(`Contract deployed at address: ${deployedContractAddress}`);
-  } catch (error) {
-    throw new Error(`Error during deployment: ${error}`);
+  const chain = client.chain as GenLayerChain;
+  if (chain.id !== AUTHORIZED_DEPLOYMENT.chainId) {
+    throw new Error(`Deployment client must target chain ${AUTHORIZED_DEPLOYMENT.chainId}.`);
   }
+  if (clientRpcUrl(client) !== AUTHORIZED_DEPLOYMENT.rpcUrl) {
+    throw new Error(`Deployment client must target ${AUTHORIZED_DEPLOYMENT.rpcUrl}.`);
+  }
+
+  const signer = client.account?.address;
+  if (!signer) {
+    throw new Error("Deployment client has no signer; refusing to prepare a transaction.");
+  }
+  const feeOptions = loadDeploymentFeeOptions();
+  const feeEstimate = await client.estimateTransactionFees(feeOptions);
+  const fees = {
+    distribution: feeEstimate.distribution,
+    feeValue: feeEstimate.feeValue,
+  };
+  const validUntil = BigInt(Math.floor(Date.now() / 1000) + AUTHORIZED_DEPLOYMENT.validUntilWindowSeconds);
+
+  // Last local check before deployContract reaches the SDK signing path.
+  // Every authorized envelope field is explicit; no CLI preset or SDK default is accepted.
+  assertAuthorizedDeploymentEnvelope({
+    rpcUrl: clientRpcUrl(client),
+    chainId: chain.id,
+    signer,
+    sourceSha256: sourceHash(contractCode),
+    constructorArgs,
+    feeValue: fees.feeValue,
+    fees,
+    userValue: 0n,
+    recipient: AUTHORIZED_DEPLOYMENT.recipient,
+    leaderOnly: false,
+    consensusMaxRotations: AUTHORIZED_DEPLOYMENT.consensusMaxRotations,
+    validUntil,
+  });
+
+  const deployTransaction = await client.deployContract({
+    code: contractCode,
+    fees,
+    args: constructorArgs,
+    leaderOnly: false,
+    consensusMaxRotations: AUTHORIZED_DEPLOYMENT.consensusMaxRotations,
+    validUntil,
+  });
+
+  const receipt = await client.waitForTransactionReceipt({
+    hash: deployTransaction as TransactionHash,
+    status: "FINALIZED",
+    retries: 200,
+  });
+
+  if (receipt.txExecutionResultName !== "FINISHED_WITH_RETURN") {
+    throw new Error(`Deployment failed. Receipt: ${JSON.stringify(receipt)}`);
+  }
+
+  const decodedAddress = (receipt.txDataDecoded as DecodedDeployData)?.contractAddress;
+  const deployedContractAddress =
+    decodedAddress ??
+    (receipt as any).contractAddress ??
+    (receipt as any).contract_address ??
+    (receipt as any).recipient ??
+    (receipt as any).to_address;
+  if (!deployedContractAddress) {
+    throw new Error("Deployment succeeded without a contract address");
+  }
+  console.log(`Contract deployed at address: ${deployedContractAddress}`);
 }

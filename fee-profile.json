@@ -8,8 +8,13 @@
     "leaderTimeunitsAllocation": "125",
     "validatorTimeunitsAllocation": "250",
     "executionBudgetPerRound": "25000000000000000",
+    "executionConsumed": "0",
     "totalMessageFees": "0",
-    "rotationsPerRound": "1",
+    "appealRounds": "0",
+    "rotations": ["1"],
+    "maxPriceGenPerTimeUnit": "2",
+    "storageFeeMaxGasPrice": "300000000",
+    "receiptFeeMaxGasPrice": "300000000",
     "feeValueAtMeasurement": "50000000000006470"
   }
 }
