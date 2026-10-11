@@ -139,6 +139,9 @@ def test_config_is_exposed(direct_vm, direct_deploy):
         "max_source_chars": 12_000,
         "max_total_source_chars": 72_000,
         "max_prompt_chars": 140_000,
+        "execution_gate_version": 1,
+        "supports_execution_gate": True,
+            "supports_execution_revocation": True,
     }
 
 

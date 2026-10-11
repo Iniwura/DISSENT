@@ -7,9 +7,11 @@ import {
   type Accounting,
   type Challenge,
   type DissentContractConfig,
+  executionActionDigest,
   field,
   parseObservations,
   toAddress,
+  toBool,
   toBigInt,
   toText,
   type MarketSnapshot,
@@ -263,6 +265,18 @@ function readConfig(raw: unknown): DissentContractConfig {
     maxSourceChars: toBigInt(field(raw, "max_source_chars", 7), "max_source_chars"),
     maxTotalSourceChars: toBigInt(field(raw, "max_total_source_chars", 8), "max_total_source_chars"),
     maxPromptChars: toBigInt(field(raw, "max_prompt_chars", 9), "max_prompt_chars"),
+    executionGateVersion: (() => {
+      const value = field(raw, "execution_gate_version", 10);
+      return value === undefined ? 0n : toBigInt(value, "execution_gate_version");
+    })(),
+    supportsExecutionGate: (() => {
+      const value = field(raw, "supports_execution_gate", 11);
+      return value === undefined ? false : toBool(value, "supports_execution_gate");
+    })(),
+    supportsExecutionRevocation: (() => {
+      const value = field(raw, "supports_execution_revocation", 12);
+      return value === undefined ? false : toBool(value, "supports_execution_revocation");
+    })(),
   };
 }
 
@@ -276,6 +290,16 @@ function readAccounting(raw: unknown): Accounting {
 function readProposal(raw: unknown): Proposal {
   const observations = parseObservations(field(raw, "evidence_observations", 17));
   const status = toText(field(raw, "status", 7), "status") as ProposalStatus | string;
+  const zeroAddress = "0x0000000000000000000000000000000000000000";
+  const executionExecutorRaw = field(raw, "execution_executor", 22);
+  const executionExecutor = typeof executionExecutorRaw === "string" && /^0x[0-9a-fA-F]{40}$/.test(executionExecutorRaw)
+    ? executionExecutorRaw
+    : zeroAddress;
+  const actionDigestRaw = field(raw, "action_digest", 23);
+  const authorizedDigestRaw = field(raw, "authorized_action_digest", 25);
+  const authorizedRaw = field(raw, "execution_authorized", 24);
+  const consumedRaw = field(raw, "execution_consumed", 27);
+  const revokedRaw = field(raw, "execution_revoked", 29);
   return {
     id: toText(field(raw, "id", 0), "proposal.id"),
     proposer: toAddress(field(raw, "proposer", 1), "proposal.proposer"),
@@ -300,6 +324,65 @@ function readProposal(raw: unknown): Proposal {
     parentProposalId: toText(field(raw, "parent_proposal_id", 19), "proposal.parent_proposal_id"),
     revisionNumber: toBigInt(field(raw, "revision_number", 20), "proposal.revision_number"),
     supersededBy: toText(field(raw, "superseded_by", 21), "proposal.superseded_by"),
+    executionExecutor,
+    actionDigest: typeof actionDigestRaw === "string" ? actionDigestRaw : "",
+    executionAuthorized: typeof authorizedRaw === "boolean" ? authorizedRaw : false,
+    authorizedActionDigest: typeof authorizedDigestRaw === "string" ? authorizedDigestRaw : "",
+    authorizedAt: (() => {
+      const value = field(raw, "authorized_at", 26);
+      return value === undefined ? 0n : toBigInt(value, "proposal.authorized_at");
+    })(),
+    executionConsumed: typeof consumedRaw === "boolean" ? consumedRaw : false,
+    executionConsumedAt: (() => {
+      const value = field(raw, "execution_consumed_at", 28);
+      return value === undefined ? 0n : toBigInt(value, "proposal.execution_consumed_at");
+    })(),
+    executionRevoked: typeof revokedRaw === "boolean" ? revokedRaw : false,
+    revokedAt: (() => {
+      const value = field(raw, "revoked_at", 30);
+      return value === undefined ? 0n : toBigInt(value, "proposal.revoked_at");
+    })(),
+  };
+}
+
+function executionGateFromProposal(proposal: Proposal): import("./types").ExecutionGate | null {
+  if (proposal.executionExecutor.toLowerCase() === "0x0000000000000000000000000000000000000000") return null;
+  const config = requireConfig();
+  let digestMatches = false;
+  try {
+    digestMatches = executionActionDigest({
+      action: proposal.action,
+      chainId: String(config.chainId),
+      contractAddress: config.contractAddress,
+      evidenceUrl: proposal.evidenceUrl,
+      executionExecutor: proposal.executionExecutor,
+      executionRecipient: proposal.executionRecipient,
+      objective: proposal.objective,
+      policy: proposal.policy,
+      proposalId: proposal.id,
+      proposer: proposal.proposer,
+    }) === proposal.actionDigest;
+  } catch {
+    digestMatches = false;
+  }
+  return {
+    enabled: true,
+    chainId: BigInt(config.chainId),
+    contractAddress: config.contractAddress,
+    proposalId: proposal.id,
+    proposer: proposal.proposer,
+    executionRecipient: proposal.executionRecipient,
+    executionExecutor: proposal.executionExecutor,
+    actionDigest: proposal.actionDigest,
+    status: proposal.status,
+    executionAuthorized: proposal.executionAuthorized,
+    authorizedActionDigest: proposal.authorizedActionDigest,
+    authorizedAt: proposal.authorizedAt,
+    executionConsumed: proposal.executionConsumed,
+    executionConsumedAt: proposal.executionConsumedAt,
+    executionRevoked: proposal.executionRevoked,
+    revokedAt: proposal.revokedAt,
+    digestMatches,
   };
 }
 
@@ -412,7 +495,7 @@ export async function loadProposalDetail(proposalId: string, proposalHint?: Prop
   const challengeIds = readIdList(rawChallengeIds);
   const challenges = await mapWithConcurrency(challengeIds, MAX_PARALLEL_DETAIL_READS, async (id) => readChallenge(await readContract("get_challenge", [id], priority)));
   const canExecute = proposal.status === "CLEAR" && await readContract("can_execute", [canonicalProposalId], priority) === true;
-  return { proposal, challenges, canExecute };
+  return { proposal, challenges, canExecute, executionGate: executionGateFromProposal(proposal) };
 }
 
 export type TargetedMarketUpdate = {

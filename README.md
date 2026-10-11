@@ -62,6 +62,40 @@ The current intelligent contract implements:
   alternative to adjudication
 - checked u256 accounting, minimum execution bonds, and bounded evidence prompts
 
+## Dissent Execution Gate milestone
+
+The repository now contains an opt-in execution-gate extension in
+`contracts/dissent.py`. The existing deployed contract at
+`0x8BD79Ac285FBd87147B9A64BfF60436C050A684C` predates this extension and must
+not be treated as an external-action authorization source. Its `execute()`
+method only settles the stored execution bond into the internal Dissent credit
+ledger.
+
+Gate-enabled proposals use `commit_execution_gate` and bind the exact stored
+proposal payload to a Keccak digest, including chain and contract domain, a
+dedicated controlled executor address, an on-chain authorization, and a
+one-time consumed flag. Addresses use the lowercase `Address.as_hex` encoding
+and the digest preserves UTF-8 payload bytes. `authorize_execution`,
+`consume_execution`, and proposer-only `revoke_execution` are independently
+checked by the contract. The controlled executor in
+`agents/execution_gate.py` re-reads finalized chain state, checks the digest,
+`CLEAR` decision, revocation state, and a 900-second controlled authorization
+TTL, consumes the authorization before the tool boundary, and then runs a safe
+controlled operation. `BLOCK`, `REVISE`, altered payloads, replayed
+authorizations, stale authorizations, and unavailable chain state fail closed.
+
+Because the installed GenLayer VM does not provide a reliable authoritative
+wall-clock, the contract does not pretend to enforce a timestamp expiry.
+Proposer revocation is the authoritative cancellation path; the controlled
+executor's bounded TTL is an additional fail-closed operational guard. A crash
+after consumption and before the tool remains at-most-once and requires a fresh
+proposal.
+
+This source extension requires a separately approved deployment. No existing
+deployment record was changed and no production contract was redeployed by
+this milestone work. See `EXECUTION_GATE.md` for the ABI, security model,
+verification commands, and deployment authorization boundary.
+
 The agents/ package contains a local planner and fixture scenario for reproducible
 development. It is not proof of wallet-driven operation; the deployed review and
 settlement above are the demonstrated on-chain evidence.

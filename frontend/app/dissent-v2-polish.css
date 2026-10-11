@@ -91,3 +91,22 @@
 .dv2-dialog-close{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;border:1px solid var(--dv2-line);background:transparent;color:inherit;cursor:pointer}
 .dv2-dialog .dv2-challenge-form{padding:18px 0 0}
 @media (max-width:760px){.dv2-challenge-countdown{margin-top:16px}.dv2-countdown-digits strong{font-size:20px}.dv2-countdown-digits small{font-size:9px}.dv2-dialog-backdrop{align-items:start;padding:82px 16px 16px}.dv2-dialog{width:calc(100vw - 32px);max-height:calc(100svh - 98px);padding:18px;box-shadow:6px 6px 0 var(--dv2-red)}}
+
+.dv2-gate-status{margin:18px 0;padding:16px;border:1px solid var(--dv2-line);background:var(--dv2-paper-deep)}
+.dv2-gate-status>div{display:grid;gap:5px}
+.dv2-gate-status>div>span{color:var(--dv2-red);font:10px var(--dv2-mono);letter-spacing:.08em;text-transform:uppercase}
+.dv2-gate-status>div>strong{font-size:17px}
+.dv2-gate-status>p{margin:12px 0;color:var(--dv2-grey);font-size:13px;line-height:1.45}
+.dv2-gate-status dl{margin:0;border-top:1px solid var(--dv2-line)}
+.dv2-gate-status dl>div{display:grid;gap:4px;padding:9px 0;border-bottom:1px solid var(--dv2-line)}
+.dv2-gate-status dt{color:var(--dv2-grey);font:10px var(--dv2-mono);text-transform:uppercase}
+.dv2-gate-status dd{margin:0;overflow-wrap:anywhere;font-size:11px}
+.dv2-gate-status>small{display:block;margin-top:12px;color:var(--dv2-grey);font-size:11px;line-height:1.4}
+.dv2-gate-ok{color:#237a4b!important;font-weight:700}
+.dv2-gate-denied{color:var(--dv2-red)!important;font-weight:700}
+.dv2-gate-fieldset{margin:0 0 18px;padding:0;border:0}
+.dv2-gate-fieldset legend{margin-bottom:8px;color:var(--dv2-grey);font:10px var(--dv2-mono);letter-spacing:.08em;text-transform:uppercase}
+.dv2-gate-toggle{display:flex;align-items:flex-start;gap:10px;margin:18px 0;padding:14px;border:1px solid var(--dv2-line);cursor:pointer}
+.dv2-gate-toggle input{margin-top:3px;accent-color:var(--dv2-red)}
+.dv2-gate-toggle span{display:grid;gap:5px}
+.dv2-gate-toggle small{color:var(--dv2-grey);font-size:11px;line-height:1.4}

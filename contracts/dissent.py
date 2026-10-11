@@ -1,4 +1,5 @@
 # { "Depends": "py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng" }
+# pyright: reportCallIssue=false
 
 import json
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ REVISE = "REVISE"
 BLOCK = "BLOCK"
 EXECUTED = "EXECUTED"
 CANCELLED = "CANCELLED"
+EXECUTION_GATE_VERSION = 1
 ACCEPTED = "ACCEPTED"
 REJECTED = "REJECTED"
 
@@ -53,6 +55,15 @@ class Proposal:
     parent_proposal_id: str
     revision_number: gl.u256
     superseded_by: str
+    execution_executor: gl.Address
+    action_digest: str
+    execution_authorized: bool
+    authorized_action_digest: str
+    authorized_at: gl.u256
+    execution_consumed: bool
+    execution_consumed_at: gl.u256
+    execution_revoked: bool
+    revoked_at: gl.u256
 
 
 @allow_storage
@@ -241,6 +252,39 @@ class Dissent(gl.contract.Contract):
         hasher.update(value.encode("utf-8"))
         return hasher.hexdigest()
 
+    def _action_digest(
+        self,
+        proposal_id: str,
+        proposer: gl.Address,
+        action: str,
+        objective: str,
+        policy: str,
+        evidence_url: str,
+        execution_recipient: gl.Address,
+        execution_executor: gl.Address,
+    ) -> str:
+        """Hash the exact, stored gate payload with a deterministic encoding."""
+        payload = {
+            "action": action,
+            "chain_id": str(gl.message.chain_id),
+            "contract_address": gl.message.contract_address.as_hex,
+            "evidence_url": evidence_url,
+            "execution_executor": execution_executor.as_hex,
+            "execution_recipient": execution_recipient.as_hex,
+            "objective": objective,
+            "policy": policy,
+            "proposal_id": proposal_id,
+            "proposer": proposer.as_hex,
+        }
+        return self._hash_text(
+            json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+        )
+
     def _normalized_objection(self, value: str) -> str:
         return " ".join(value.strip().split()).lower()
 
@@ -287,6 +331,7 @@ class Dissent(gl.contract.Contract):
         credit_amount: int,
         parent_proposal_id: str = "",
         revision_number: int = 0,
+        execution_executor: str = "",
     ) -> None:
         canonical_proposal_id = self._canonical_id(proposal_id, "proposal_id")
         cleaned_action = self._clean_text(action, "action", 2000)
@@ -312,6 +357,18 @@ class Dissent(gl.contract.Contract):
             raise gl.vm.UserError("Invalid execution recipient")
         if recipient == gl.Address.ZERO:
             raise gl.vm.UserError("Execution recipient cannot be zero")
+
+        executor = gl.Address.ZERO
+        if execution_executor:
+            cleaned_executor = self._clean_text(
+                execution_executor, "execution_executor", 42
+            )
+            try:
+                executor = gl.Address(cleaned_executor)
+            except Exception:
+                raise gl.vm.UserError("Invalid execution executor")
+            if executor == gl.Address.ZERO:
+                raise gl.vm.UserError("Execution executor cannot be zero")
 
         paid = self._checked_amount(int(gl.message.value), "Proposal deposit")
         reused_credit = self._checked_amount(credit_amount, "Credit amount")
@@ -353,6 +410,24 @@ class Dissent(gl.contract.Contract):
             parent_proposal_id=parent,
             revision_number=gl.u256(revision),
             superseded_by="",
+            execution_executor=executor,
+            action_digest=self._action_digest(
+                canonical_proposal_id,
+                gl.message.sender_address,
+                cleaned_action,
+                cleaned_objective,
+                cleaned_policy,
+                canonical_url,
+                recipient,
+                executor,
+            ),
+            execution_authorized=False,
+            authorized_action_digest="",
+            authorized_at=gl.u256(0),
+            execution_consumed=False,
+            execution_consumed_at=gl.u256(0),
+            execution_revoked=False,
+            revoked_at=gl.u256(0),
         )
         self.proposal_ids.append(canonical_proposal_id)
 
@@ -390,6 +465,34 @@ class Dissent(gl.contract.Contract):
         )
 
     @gl.public.write.payable
+    def commit_execution_gate(
+        self,
+        proposal_id: str,
+        action: str,
+        objective: str,
+        policy: str,
+        evidence_url: str,
+        execution_recipient: str,
+        execution_executor: str,
+        bounty: int,
+        review_seconds: int,
+        credit_amount: int,
+    ) -> None:
+        """Open a proposal whose external action must use the opt-in gate."""
+        self._open_proposal(
+            proposal_id,
+            action,
+            objective,
+            policy,
+            evidence_url,
+            execution_recipient,
+            bounty,
+            review_seconds,
+            credit_amount,
+            execution_executor=execution_executor,
+        )
+
+    @gl.public.write.payable
     def revise(
         self,
         parent_proposal_id: str,
@@ -414,6 +517,8 @@ class Dissent(gl.contract.Contract):
             raise gl.vm.UserError("Proposal is not open for revision")
         if parent.superseded_by:
             raise gl.vm.UserError("Proposal already superseded")
+        if parent.execution_executor != gl.Address.ZERO:
+            raise gl.vm.UserError("Gate proposal requires controlled revision")
 
         next_revision = self._checked_add(
             int(parent.revision_number), 1, "Revision number"
@@ -430,6 +535,54 @@ class Dissent(gl.contract.Contract):
             credit_amount,
             parent_id,
             next_revision,
+        )
+        parent.superseded_by = self._canonical_id(proposal_id, "proposal_id")
+
+    @gl.public.write.payable
+    def revise_execution_gate(
+        self,
+        parent_proposal_id: str,
+        proposal_id: str,
+        action: str,
+        objective: str,
+        policy: str,
+        evidence_url: str,
+        execution_recipient: str,
+        execution_executor: str,
+        bounty: int,
+        review_seconds: int,
+        credit_amount: int,
+    ) -> None:
+        parent_id = self._canonical_id(parent_proposal_id, "parent_proposal_id")
+        if parent_id not in self.proposals:
+            raise gl.vm.UserError("Parent proposal not found")
+
+        parent = self.proposals[parent_id]
+        if gl.message.sender_address != parent.proposer:
+            raise gl.vm.UserError("Only proposer can revise")
+        if parent.status != REVISE:
+            raise gl.vm.UserError("Proposal is not open for revision")
+        if parent.superseded_by:
+            raise gl.vm.UserError("Proposal already superseded")
+        if parent.execution_executor == gl.Address.ZERO:
+            raise gl.vm.UserError("Parent proposal is not an execution-gate proposal")
+
+        next_revision = self._checked_add(
+            int(parent.revision_number), 1, "Revision number"
+        )
+        self._open_proposal(
+            proposal_id,
+            action,
+            objective,
+            policy,
+            evidence_url,
+            execution_recipient,
+            bounty,
+            review_seconds,
+            credit_amount,
+            parent_id,
+            next_revision,
+            execution_executor,
         )
         parent.superseded_by = self._canonical_id(proposal_id, "proposal_id")
 
@@ -870,6 +1023,26 @@ class Dissent(gl.contract.Contract):
             challenge.reasoning = "Proposal cancelled after settlement grace period."
             self._credit(challenge.challenger, stake)
 
+    def _release_execution_bond(self, proposal: Proposal) -> None:
+        bond = self._checked_amount(
+            int(proposal.outstanding_bond), "Outstanding execution bond"
+        )
+        if bond == 0:
+            raise gl.vm.UserError("Execution bond is already released")
+        self._decrease_outstanding(bond)
+        proposal.outstanding_bond = gl.u256(0)
+        self._credit(proposal.execution_recipient, bond)
+
+    def _refund_execution_bond(self, proposal: Proposal, recipient: gl.Address) -> None:
+        bond = self._checked_amount(
+            int(proposal.outstanding_bond), "Outstanding execution bond"
+        )
+        if bond == 0:
+            raise gl.vm.UserError("Execution bond is already released")
+        self._decrease_outstanding(bond)
+        proposal.outstanding_bond = gl.u256(0)
+        self._credit(recipient, bond)
+
     @gl.public.write
     def cancel(self, proposal_id: str) -> None:
         proposal_id = self._canonical_id(proposal_id, "proposal_id")
@@ -901,19 +1074,99 @@ class Dissent(gl.contract.Contract):
         proposal = self.proposals[proposal_id]
         if proposal.status != CLEAR:
             raise gl.vm.UserError("Proposal is not CLEAR")
+        if proposal.execution_executor != gl.Address.ZERO:
+            raise gl.vm.UserError("Gate proposal requires controlled executor")
         if gl.message.sender_address != proposal.proposer:
             raise gl.vm.UserError("Only proposer can execute")
 
-        bond = self._checked_amount(
-            int(proposal.outstanding_bond), "Outstanding execution bond"
-        )
-        if bond == 0:
-            raise gl.vm.UserError("Execution bond is already released")
-        self._decrease_outstanding(bond)
+        self._release_execution_bond(proposal)
         proposal.status = EXECUTED
         proposal.executed_at = gl.u256(self._now())
-        proposal.outstanding_bond = gl.u256(0)
-        self._credit(proposal.execution_recipient, bond)
+
+    @gl.public.write
+    def authorize_execution(self, proposal_id: str, action_digest: str) -> None:
+        """Authorize the exact stored payload after a CLEAR decision."""
+        proposal_id = self._canonical_id(proposal_id, "proposal_id")
+        if proposal_id not in self.proposals:
+            raise gl.vm.UserError("Proposal not found")
+        proposal = self.proposals[proposal_id]
+        if proposal.execution_executor == gl.Address.ZERO:
+            raise gl.vm.UserError("Proposal is not an execution-gate proposal")
+        if proposal.status != CLEAR:
+            raise gl.vm.UserError("Only CLEAR proposals can be authorized")
+        if gl.message.sender_address != proposal.execution_executor:
+            raise gl.vm.UserError("Only the controlled executor can authorize")
+        digest = self._clean_text(action_digest, "action_digest", 128).lower()
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+            raise gl.vm.UserError("Invalid action digest")
+        if digest != proposal.action_digest:
+            raise gl.vm.UserError("Action digest does not match proposal")
+        if proposal.execution_consumed:
+            raise gl.vm.UserError("Execution authorization is already consumed")
+        if proposal.execution_revoked:
+            raise gl.vm.UserError("Execution authorization was revoked")
+        if proposal.execution_authorized:
+            raise gl.vm.UserError("Execution authorization already exists")
+        proposal.execution_authorized = True
+        proposal.authorized_action_digest = digest
+        proposal.authorized_at = gl.u256(self._now())
+
+    @gl.public.write
+    def consume_execution(self, proposal_id: str, action_digest: str) -> None:
+        """Consume an authorization exactly once before the controlled tool runs."""
+        proposal_id = self._canonical_id(proposal_id, "proposal_id")
+        if proposal_id not in self.proposals:
+            raise gl.vm.UserError("Proposal not found")
+        proposal = self.proposals[proposal_id]
+        if proposal.execution_executor == gl.Address.ZERO:
+            raise gl.vm.UserError("Proposal is not an execution-gate proposal")
+        if proposal.status != CLEAR:
+            raise gl.vm.UserError("Execution is not CLEAR")
+        if gl.message.sender_address != proposal.execution_executor:
+            raise gl.vm.UserError("Only the controlled executor can consume")
+        digest = self._clean_text(action_digest, "action_digest", 128).lower()
+        if digest != proposal.action_digest:
+            raise gl.vm.UserError("Action digest does not match proposal")
+        if not proposal.execution_authorized:
+            raise gl.vm.UserError("Execution is not authorized")
+        if proposal.authorized_action_digest != digest:
+            raise gl.vm.UserError("Authorized action digest does not match")
+        if proposal.execution_consumed:
+            raise gl.vm.UserError("Execution authorization is already consumed")
+        if proposal.execution_revoked:
+            raise gl.vm.UserError("Execution authorization was revoked")
+
+        # Consume before the external tool is called. A tool failure cannot be
+        # retried through this authorization, which is the fail-closed choice.
+        proposal.execution_consumed = True
+        proposal.execution_consumed_at = gl.u256(self._now())
+        self._release_execution_bond(proposal)
+        proposal.status = EXECUTED
+        proposal.executed_at = proposal.execution_consumed_at
+
+    @gl.public.write
+    def revoke_execution(self, proposal_id: str) -> None:
+        """Permanently cancel a gate before external execution can occur."""
+        proposal_id = self._canonical_id(proposal_id, "proposal_id")
+        if proposal_id not in self.proposals:
+            raise gl.vm.UserError("Proposal not found")
+        proposal = self.proposals[proposal_id]
+        if proposal.execution_executor == gl.Address.ZERO:
+            raise gl.vm.UserError("Proposal is not an execution-gate proposal")
+        if gl.message.sender_address != proposal.proposer:
+            raise gl.vm.UserError("Only proposer can revoke execution")
+        if proposal.status != CLEAR:
+            raise gl.vm.UserError("Only CLEAR proposals can be revoked")
+        if proposal.execution_consumed:
+            raise gl.vm.UserError("Execution authorization is already consumed")
+        if proposal.execution_revoked:
+            raise gl.vm.UserError("Execution authorization is already revoked")
+
+        proposal.execution_revoked = True
+        proposal.revoked_at = gl.u256(self._now())
+        proposal.status = CANCELLED
+        proposal.resolution = "Execution authorization revoked by proposer."
+        self._refund_execution_bond(proposal, proposal.proposer)
 
     @gl.public.view
     def get_config(self) -> dict:
@@ -928,6 +1181,9 @@ class Dissent(gl.contract.Contract):
             "max_source_chars": MAX_SOURCE_CHARS,
             "max_total_source_chars": MAX_TOTAL_SOURCE_CHARS,
             "max_prompt_chars": MAX_PROMPT_CHARS,
+            "execution_gate_version": EXECUTION_GATE_VERSION,
+            "supports_execution_gate": True,
+            "supports_execution_revocation": True,
         }
 
     @gl.public.view
@@ -975,10 +1231,47 @@ class Dissent(gl.contract.Contract):
 
     @gl.public.view
     def can_execute(self, proposal_id: str) -> bool:
-        return (
-            self.proposals[self._canonical_id(proposal_id, "proposal_id")].status
-            == CLEAR
-        )
+        proposal = self.proposals[self._canonical_id(proposal_id, "proposal_id")]
+        return proposal.status == CLEAR and proposal.execution_executor == gl.Address.ZERO
+
+    @gl.public.view
+    def get_execution_gate(self, proposal_id: str) -> dict:
+        proposal = self.proposals[self._canonical_id(proposal_id, "proposal_id")]
+        return {
+            "enabled": proposal.execution_executor != gl.Address.ZERO,
+            "chain_id": str(gl.message.chain_id),
+            "contract_address": gl.message.contract_address.as_hex,
+            "proposal_id": proposal.id,
+            "proposer": proposal.proposer.as_hex,
+            "execution_recipient": proposal.execution_recipient.as_hex,
+            "execution_executor": proposal.execution_executor.as_hex,
+            "action_digest": proposal.action_digest,
+            "status": proposal.status,
+            "execution_authorized": proposal.execution_authorized,
+            "authorized_action_digest": proposal.authorized_action_digest,
+            "authorized_at": int(proposal.authorized_at),
+            "execution_consumed": proposal.execution_consumed,
+            "execution_consumed_at": int(proposal.execution_consumed_at),
+            "execution_revoked": proposal.execution_revoked,
+            "revoked_at": int(proposal.revoked_at),
+        }
+
+    @gl.public.view
+    def get_execution_payload(self, proposal_id: str) -> dict:
+        proposal = self.proposals[self._canonical_id(proposal_id, "proposal_id")]
+        return {
+            "action": proposal.action,
+            "chain_id": str(gl.message.chain_id),
+            "contract_address": gl.message.contract_address.as_hex,
+            "evidence_url": proposal.evidence_url,
+            "execution_executor": proposal.execution_executor.as_hex,
+            "execution_recipient": proposal.execution_recipient.as_hex,
+            "objective": proposal.objective,
+            "policy": proposal.policy,
+            "proposal_id": proposal.id,
+            "proposer": proposal.proposer.as_hex,
+            "action_digest": proposal.action_digest,
+        }
 
     @gl.public.view
     def get_credit(self, account: str) -> int:

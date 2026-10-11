@@ -1,4 +1,5 @@
 import { DissentValidationError } from "./errors";
+import { getAddress, keccak256, stringToHex } from "viem";
 
 export const PROPOSAL_STATUSES = [
   "OPEN",
@@ -42,6 +43,15 @@ export type Proposal = {
   parentProposalId: string;
   revisionNumber: bigint;
   supersededBy: string;
+  executionExecutor: string;
+  actionDigest: string;
+  executionAuthorized: boolean;
+  authorizedActionDigest: string;
+  authorizedAt: bigint;
+  executionConsumed: boolean;
+  executionConsumedAt: bigint;
+  executionRevoked: boolean;
+  revokedAt: bigint;
 };
 
 export type Challenge = {
@@ -68,7 +78,78 @@ export type DissentContractConfig = {
   maxSourceChars: bigint;
   maxTotalSourceChars: bigint;
   maxPromptChars: bigint;
+  executionGateVersion: bigint;
+  supportsExecutionGate: boolean;
+  supportsExecutionRevocation: boolean;
 };
+
+export type ExecutionGate = {
+  enabled: boolean;
+  chainId: bigint;
+  contractAddress: string;
+  proposalId: string;
+  proposer: string;
+  executionRecipient: string;
+  executionExecutor: string;
+  actionDigest: string;
+  status: string;
+  executionAuthorized: boolean;
+  authorizedActionDigest: string;
+  authorizedAt: bigint;
+  executionConsumed: boolean;
+  executionConsumedAt: bigint;
+  executionRevoked: boolean;
+  revokedAt: bigint;
+  digestMatches: boolean;
+};
+
+export type ExecutionActionPayload = {
+  action: string;
+  chainId: string;
+  contractAddress: string;
+  evidenceUrl: string;
+  executionExecutor: string;
+  executionRecipient: string;
+  objective: string;
+  policy: string;
+  proposalId: string;
+  proposer: string;
+};
+
+function jsonString(value: string): string {
+  return JSON.stringify(value);
+}
+
+export function canonicalExecutionPayload(payload: ExecutionActionPayload): string {
+  const canonical = {
+    action: payload.action,
+    chain_id: payload.chainId,
+    contract_address: getAddress(payload.contractAddress).toLowerCase(),
+    evidence_url: payload.evidenceUrl,
+    execution_executor: getAddress(payload.executionExecutor).toLowerCase(),
+    execution_recipient: getAddress(payload.executionRecipient).toLowerCase(),
+    objective: payload.objective,
+    policy: payload.policy,
+    proposal_id: payload.proposalId,
+    proposer: getAddress(payload.proposer).toLowerCase(),
+  };
+  return "{" + [
+    `"action":${jsonString(canonical.action)}`,
+    `"chain_id":${jsonString(canonical.chain_id)}`,
+    `"contract_address":${jsonString(canonical.contract_address)}`,
+    `"evidence_url":${jsonString(canonical.evidence_url)}`,
+    `"execution_executor":${jsonString(canonical.execution_executor)}`,
+    `"execution_recipient":${jsonString(canonical.execution_recipient)}`,
+    `"objective":${jsonString(canonical.objective)}`,
+    `"policy":${jsonString(canonical.policy)}`,
+    `"proposal_id":${jsonString(canonical.proposal_id)}`,
+    `"proposer":${jsonString(canonical.proposer)}`,
+  ].join(",") + "}";
+}
+
+export function executionActionDigest(payload: ExecutionActionPayload): string {
+  return keccak256(stringToHex(canonicalExecutionPayload(payload))).slice(2);
+}
 
 export type Accounting = {
   totalOutstandingEscrow: bigint;
@@ -88,6 +169,7 @@ export type ProposalDetail = {
   proposal: Proposal;
   challenges: Challenge[];
   canExecute: boolean;
+  executionGate: ExecutionGate | null;
 };
 
 export function toBigInt(value: unknown, fieldName: string): bigint {
@@ -99,6 +181,11 @@ export function toBigInt(value: unknown, fieldName: string): bigint {
 
 export function toText(value: unknown, fieldName: string): string {
   if (typeof value !== "string") throw new Error(`Invalid ${fieldName} value returned by contract.`);
+  return value;
+}
+
+export function toBool(value: unknown, fieldName: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Invalid ${fieldName} value returned by contract.`);
   return value;
 }
 
