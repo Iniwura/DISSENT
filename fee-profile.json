@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "chainId": 61997,
+  "network": "studio-dev",
+  "measuredAt": "2026-10-11",
+  "provenance": "Read-only genlayer-js@2.0.0-rc.1 estimateTransactionFees against https://studio-dev.genlayer.com/api",
+  "deploy": {
+    "leaderTimeunitsAllocation": "125",
+    "validatorTimeunitsAllocation": "250",
+    "executionBudgetPerRound": "25000000000000000",
+    "totalMessageFees": "0",
+    "rotationsPerRound": "1",
+    "feeValueAtMeasurement": "50000000000006470"
+  }
+}
